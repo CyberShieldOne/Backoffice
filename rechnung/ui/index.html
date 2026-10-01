@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CS Rechnung</title>
+<style>
+  :root {
+    --navy: #0D1730; --magenta: #D6328A; --bg: #F4F5F8; --karte: #FFFFFF;
+    --text: #1B2030; --leise: #5B6170; --linie: #DBDFE7; --feld: #FFFFFF;
+    --ok: #1F8A5B; --warn: #A15C00; --fehler: #B42318; --fokus: rgba(214, 50, 138, .35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0B1020; --karte: #141B30; --text: #E8EAF2; --leise: #9AA1B5; --linie: #283150;
+            --feld: #0F1528; --ok: #4CC38A; --warn: #E0A040; --fehler: #F26B5B; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+  header { background: var(--navy); color: #fff; padding: 18px 28px; display: flex; align-items: baseline; gap: 14px;
+           border-bottom: 3px solid var(--magenta); }
+  header .marke { font-weight: 800; letter-spacing: .28em; font-size: 15px; }
+  header .titel { color: #C9CDDA; font-size: 13px; letter-spacing: .04em; }
+  header button { margin-left: auto; }
+  main { max-width: 980px; margin: 24px auto 60px; padding: 0 16px; display: grid; gap: 18px; }
+  .karte { background: var(--karte); border: 1px solid var(--linie); border-radius: 10px; padding: 20px 22px; }
+  h2 { margin: 0 0 14px; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--leise);
+       display: flex; align-items: center; gap: 10px; }
+  h2 .nr { background: var(--magenta); color: #fff; border-radius: 50%; width: 20px; height: 20px; display: inline-grid;
+           place-items: center; font-size: 11px; letter-spacing: 0; }
+  .ablage { border: 2px dashed var(--linie); border-radius: 10px; padding: 34px 16px; text-align: center; cursor: pointer;
+            transition: border-color .15s, background .15s; }
+  .ablage:hover, .ablage.ueber { border-color: var(--magenta); background: rgba(214, 50, 138, .05); }
+  .ablage strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  .ablage span { color: var(--leise); }
+  .ablage.geladen { padding: 14px 16px; text-align: left; border-style: solid; display: flex; align-items: center; gap: 12px; }
+  .ablage.geladen strong { font-size: 14px; margin: 0; }
+  .ablage.geladen span { margin-left: auto; }
+  .raster { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 28px; }
+  .wert { display: grid; grid-template-columns: 130px 1fr; gap: 10px; padding: 3px 0; }
+  .wert dt { color: var(--leise); }
+  .wert dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+  th { text-align: left; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--leise);
+       border-bottom: 2px solid var(--navy); padding: 6px 8px; }
+  td { border-bottom: 1px solid var(--linie); padding: 8px; vertical-align: top; }
+  td.zahl, th.zahl { text-align: right; white-space: nowrap; }
+  td small { color: var(--leise); display: block; }
+  .summen { margin: 12px 0 0 auto; width: 300px; }
+  .summen div { display: flex; justify-content: space-between; padding: 3px 8px; }
+  .summen .brutto { background: var(--navy); color: #fff; border-top: 3px solid var(--magenta); padding: 10px 8px;
+                    margin-top: 6px; font-weight: 700; font-size: 16px; border-radius: 0 0 6px 6px; }
+  form { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 18px; }
+  label { display: grid; gap: 5px; font-size: 12px; color: var(--leise); }
+  label.breit { grid-column: span 2; }
+  label.ganz { grid-column: 1 / -1; }
+  input[type=text], input[type=date] { font: inherit; color: var(--text); background: var(--feld);
+       border: 1px solid var(--linie); border-radius: 7px; padding: 8px 10px; width: 100%; }
+  input:focus { outline: none; border-color: var(--magenta); box-shadow: 0 0 0 3px var(--fokus); }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+  .info { color: var(--leise); font-size: 12px; }
+  .info a { color: var(--magenta); }
+  .zeile { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+  button { font: inherit; border-radius: 7px; padding: 9px 16px; cursor: pointer; border: 1px solid var(--linie);
+           background: var(--karte); color: var(--text); }
+  button.haupt { background: var(--magenta); border-color: var(--magenta); color: #fff; font-weight: 700; padding: 11px 22px; }
+  button.haupt:disabled { opacity: .5; cursor: default; }
+  button.klein { padding: 5px 11px; font-size: 12px; background: transparent; color: #C9CDDA; border-color: #39425E; }
+  .meldung { border-radius: 8px; padding: 12px 14px; }
+  .meldung.fehler { background: rgba(180, 35, 24, .08); border: 1px solid var(--fehler); color: var(--fehler); }
+  .meldung.ok { background: rgba(31, 138, 91, .08); border: 1px solid var(--ok); }
+  .meldung.ok strong { color: var(--ok); }
+  .hinweise { margin: 10px 0 0; padding-left: 18px; color: var(--warn); font-size: 12px; }
+  .versteckt { display: none !important; }
+  .kopfzeile { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .kopfzeile h2 { margin: 0; }
+  .kopfzeile input { margin-left: auto; max-width: 260px; }
+  #historie-liste { max-height: 360px; overflow-y: auto; }
+  #historie-liste table { margin-top: 0; }
+  #historie-liste td { vertical-align: middle; }
+  #historie-liste td.aktionen { white-space: nowrap; text-align: right; }
+  #historie-liste button { padding: 4px 10px; font-size: 12px; margin-left: 4px; }
+  #historie-liste tr.neu td { background: rgba(214, 50, 138, .06); }
+  .leer { color: var(--leise); padding: 8px 0; }
+  @media (max-width: 720px) {
+    .raster, form { grid-template-columns: 1fr; }
+    label.breit { grid-column: auto; }
+    .summen { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="marke">CYBER SHIELD</span><span class="titel">Rechnung aus Auftragsbestätigung oder SAP-Rechnung</span>
+  <button class="klein" id="beenden" title="Programm beenden">Beenden</button>
+</header>
+<main>
+  <div id="getrennt" class="meldung fehler versteckt">Keine Verbindung zu CS Rechnung – das Programm wurde beendet.
+    Bitte CS Rechnung neu starten; dieses Fenster kann geschlossen werden.</div>
+  <section class="karte">
+    <h2><span class="nr">1</span>Beleg: Auftragsbestätigung oder SAP-Ariba-Rechnung</h2>
+    <div class="ablage" id="ablage" tabindex="0">
+      <strong>PDF hierher ziehen</strong><span>Auftragsbestätigung oder SAP-Ariba-Rechnung – oder klicken zum Auswählen</span>
+    </div>
+    <input type="file" id="datei" accept="application/pdf,.pdf" class="versteckt">
+    <div id="lesefehler" class="meldung fehler versteckt" style="margin-top:12px"></div>
+    <ul id="lesehinweise" class="hinweise versteckt"></ul>
+  </section>
+
+  <section class="karte versteckt" id="auftrag">
+    <h2><span class="nr">2</span>Aus dem Beleg gelesen</h2>
+    <div class="raster">
+      <dl>
+        <div class="wert"><dt>Kunde</dt><dd id="a-kunde"></dd></div>
+        <div class="wert"><dt>Anschrift</dt><dd id="a-anschrift"></dd></div>
+        <div class="wert"><dt>z. Hd.</dt><dd id="a-kontakt"></dd></div>
+        <div class="wert"><dt>Rechnung an</dt><dd id="a-mail"></dd></div>
+      </dl>
+      <dl>
+        <div class="wert"><dt id="a-ab-label">Auftragsbest.</dt><dd id="a-ab"></dd></div>
+        <div class="wert"><dt>Kundennummer</dt><dd id="a-kdnr"></dd></div>
+        <div class="wert"><dt>Bestellung</dt><dd id="a-bestellung"></dd></div>
+        <div class="wert"><dt>Projekt</dt><dd id="a-projekt"></dd></div>
+      </dl>
+    </div>
+    <table>
+      <thead><tr><th>Pos</th><th>Leistung</th><th class="zahl">Menge</th><th class="zahl">Netto</th></tr></thead>
+      <tbody id="a-positionen"></tbody>
+    </table>
+    <div class="summen">
+      <div><span>Summe netto</span><span id="s-netto"></span></div>
+      <div><span id="s-ust-text">Umsatzsteuer</span><span id="s-ust"></span></div>
+      <div class="brutto"><span>Rechnungsbetrag</span><span id="s-brutto"></span></div>
+    </div>
+  </section>
+
+  <section class="karte versteckt" id="rechnung">
+    <h2><span class="nr">3</span>Rechnungsdaten</h2>
+    <form id="formular" autocomplete="off">
+      <label><span>Rechnungsnummer <span class="info">(frei eingebbar)</span></span>
+        <input type="text" id="f-nummer" required maxlength="40" placeholder="z. B. 2026-0142">
+        <span class="info" id="f-nummer-vorschlag"></span></label>
+      <label>Rechnungsdatum<input type="date" id="f-datum" required></label>
+      <label>Zahlbar bis<input type="text" id="f-faellig" readonly tabindex="-1"></label>
+      <label>Bestellnummer des Kunden<input type="text" id="f-bestellnr" placeholder="keine"></label>
+      <label><span>Bestelldatum <span class="info">(optional)</span></span><input type="date" id="f-bestelldatum"></label>
+      <span></span>
+      <label>Leistung von<input type="date" id="f-von" required></label>
+      <label>Leistung bis<input type="date" id="f-bis" required></label>
+      <label><span>Bericht übergeben am <span class="info">(leer: Satz entfällt)</span></span><input type="date" id="f-uebergabe"></label>
+      <label><span>USt-IdNr. Empfänger <span class="info">(optional)</span></span><input type="text" id="f-ustid" placeholder="—"></label>
+      <label><span>Angebotsnummer <span class="info">(optional)</span></span><input type="text" id="f-angebot" placeholder="wird weggelassen"></label>
+      <label>&nbsp;<span class="check"><input type="checkbox" id="f-pdf"> zusätzlich PDF</span></label>
+      <label class="ganz">Ablageordner<input type="text" id="f-ordner"></label>
+    </form>
+    <div class="zeile">
+      <button class="haupt" id="erstellen">Rechnung erstellen</button>
+      <span class="info" id="pdf-info"></span>
+    </div>
+    <div id="ergebnis" class="versteckt" style="margin-top:16px"></div>
+  </section>
+  <section class="karte" id="historie">
+    <div class="kopfzeile">
+      <h2>Letzte Rechnungen</h2>
+      <input type="text" id="h-suche" placeholder="Suchen (Nummer, Kunde …)" aria-label="Historie durchsuchen">
+    </div>
+    <div id="historie-liste"></div>
+  </section>
+</main>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+let abId = null, zahlungsziel = 0;
+
+async function api(pfad, body, kopf = {}) {
+  let r;
+  try {
+    r = await fetch(pfad, {
+      method: "POST",
+      headers: Object.assign({"X-Token": TOKEN}, body instanceof Blob ? {} : {"Content-Type": "application/json"}, kopf),
+      body: body instanceof Blob ? body : JSON.stringify(body || {}),
+    });
+  } catch (e) {
+    $("getrennt").classList.remove("versteckt");
+    return {status: 0, daten: {fehler: "Keine Verbindung zu CS Rechnung (Programm beendet?)."}};
+  }
+  $("getrennt").classList.add("versteckt");
+  let daten = {};
+  try { daten = await r.json(); } catch (e) {}
+  return {status: r.status, daten};
+}
+
+function ablageText(titel, zusatz) {
+  const ablage = $("ablage");
+  ablage.replaceChildren();
+  const s = document.createElement("strong"); s.textContent = titel;
+  ablage.appendChild(s);
+  if (zusatz) { const z = document.createElement("span"); z.textContent = zusatz; ablage.appendChild(z); }
+}
+
+function hinweisListe(ul, liste) {
+  ul.replaceChildren();
+  (liste || []).forEach((h) => { const li = document.createElement("li"); li.textContent = h; ul.appendChild(li); });
+  ul.classList.toggle("versteckt", !ul.children.length);
+}
+
+function deDatum(iso) {
+  if (!iso) return "";
+  const [j, m, t] = iso.split("-");
+  return `${t}.${m}.${j}`;
+}
+function plusTage(iso, n) {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function setzeText(id, t) { $(id).textContent = t || "—"; }
+
+function faelligAktualisieren() {
+  const d = $("f-datum").value;
+  $("f-faellig").value = d ? `${deDatum(plusTage(d, zahlungsziel))} (${zahlungsziel} Tage)` : "";
+}
+
+let vorschlag = "", heute = "", belegVorgabe = {nummer: "", datum: ""};
+function zeigeVorschlag(nr) {
+  vorschlag = nr;
+  const el = $("f-nummer-vorschlag");
+  el.replaceChildren();
+  if ($("f-nummer").value === nr) { el.textContent = "Vorschlag: nächste freie Nummer"; return; }
+  el.append(`Vorschlag: ${nr} `);
+  const a = document.createElement("a");
+  a.href = "#"; a.textContent = "übernehmen";
+  a.onclick = (e) => { e.preventDefault(); $("f-nummer").value = nr; zeigeVorschlag(nr); };
+  el.appendChild(a);
+}
+
+async function start() {
+  const {daten} = await api("/api/start");
+  heute = daten.heute;
+  if (!$("f-nummer").value) $("f-nummer").value = daten.nummer;  // eigene Eingabe nie überschreiben
+  zeigeVorschlag(daten.nummer);
+  $("f-datum").value = daten.heute;
+  $("f-ordner").value = daten.ordner;
+  $("f-pdf").checked = daten.pdf && daten.pdf_moeglich;
+  $("f-pdf").disabled = !daten.pdf_moeglich;
+  $("pdf-info").textContent = daten.pdf_moeglich ? "" : "PDF-Export braucht LibreOffice (/Applications/LibreOffice.app).";
+}
+
+async function ladeAb(datei) {
+  $("lesefehler").classList.add("versteckt");
+  $("ergebnis").classList.add("versteckt");
+  const ablage = $("ablage");
+  ablage.classList.remove("geladen");
+  $("lesehinweise").classList.add("versteckt");
+  ablageText(`Lese ${datei.name} …`);
+  const {status, daten} = await api("/api/lesen", datei, {"X-Dateiname": encodeURIComponent(datei.name)});
+  if (status !== 200) {
+    ablageText("PDF hierher ziehen", "Auftragsbestätigung oder SAP-Ariba-Rechnung – oder klicken zum Auswählen");
+    $("lesefehler").textContent = "Konnte den Beleg nicht lesen: " + (daten.fehler || status);
+    $("lesefehler").classList.remove("versteckt");
+    $("auftrag").classList.add("versteckt");
+    $("rechnung").classList.add("versteckt");
+    return;
+  }
+  abId = daten.id;
+  const a = daten.auftrag;
+  zahlungsziel = a.zahlungsziel_tage;
+  ablage.classList.add("geladen");
+  ablageText(`✓ ${datei.name} (${a.quelle})`, "anderen Beleg wählen");
+  hinweisListe($("lesehinweise"), daten.hinweise);
+  // kundenbezogene Eingaben des vorherigen Belegs nie übernehmen
+  $("f-ustid").value = a.ust_id_kunde || "";
+  $("f-angebot").value = "";
+  // Werte, die ein Beleg vorgibt (SAP-Rechnung: Nummer, Datum), beim nächsten Beleg zurücksetzen
+  if (belegVorgabe.nummer && $("f-nummer").value === belegVorgabe.nummer) $("f-nummer").value = vorschlag;
+  if (belegVorgabe.datum && $("f-datum").value === belegVorgabe.datum) $("f-datum").value = heute;
+  belegVorgabe = {nummer: a.rechnungsnr || "", datum: a.rechnungsdatum || ""};
+  if (a.rechnungsnr) $("f-nummer").value = a.rechnungsnr;
+  if (a.rechnungsdatum) $("f-datum").value = a.rechnungsdatum;
+  zeigeVorschlag(vorschlag);
+  $("f-bestellnr").value = a.bestell_nr || "";
+  $("f-bestelldatum").value = a.bestell_datum || "";
+  setzeText("a-kunde", a.kunde);
+  setzeText("a-anschrift", `${a.strasse}, ${a.plz_ort}`);
+  setzeText("a-kontakt", a.kontakt);
+  setzeText("a-mail", a.rechnungs_mail);
+  $("a-ab-label").textContent = a.ab_nr ? "Auftragsbest." : "SAP-Rechnung";
+  setzeText("a-ab", `${a.ab_nr || a.rechnungsnr} vom ${deDatum(a.ab_datum)}`);
+  setzeText("a-kdnr", a.kunden_nr);
+  setzeText("a-bestellung", a.bestell_nr ? `${a.bestell_nr} vom ${deDatum(a.bestell_datum)}` : "");
+  setzeText("a-projekt", a.projekt);
+  const tb = $("a-positionen");
+  tb.replaceChildren();
+  a.positionen.forEach((p, i) => {
+    const tr = document.createElement("tr");
+    const zellen = [String(i + 1).padStart(2, "0"), null, p.menge + (p.einheit ? " × " + p.einheit : ""), p.betrag_fmt];
+    zellen.forEach((z, k) => {
+      const td = document.createElement("td");
+      if (k === 1) {
+        td.textContent = p.titel;
+        const s = document.createElement("small"); s.textContent = p.produkt || p.beschreibung || ""; td.appendChild(s);
+      } else td.textContent = z;
+      if (k >= 2) td.className = "zahl";
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  $("s-netto").textContent = a.netto_fmt;
+  $("s-ust-text").textContent = `Umsatzsteuer ${a.ust_satz} %`;
+  $("s-ust").textContent = a.ust_fmt;
+  $("s-brutto").textContent = a.brutto_fmt;
+  const v = daten.vorschlag;
+  $("f-von").value = v.von || "";
+  $("f-bis").value = v.bis || $("f-datum").value;
+  $("f-uebergabe").value = v.uebergabe || "";
+  faelligAktualisieren();
+  $("auftrag").classList.remove("versteckt");
+  $("rechnung").classList.remove("versteckt");
+}
+
+async function erstellen(ueberschreiben = false) {
+  const knopf = $("erstellen");
+  const erg = $("ergebnis");
+  if (!$("formular").reportValidity()) return;
+  knopf.disabled = true;
+  knopf.textContent = "Erstelle …";
+  const {status, daten} = await api("/api/erstellen", {
+    id: abId, nummer: $("f-nummer").value, datum: $("f-datum").value, von: $("f-von").value,
+    bis: $("f-bis").value, uebergabe: $("f-uebergabe").value, ust_id: $("f-ustid").value,
+    angebot: $("f-angebot").value, bestell_nr: $("f-bestellnr").value,
+    bestell_datum: $("f-bestelldatum").value, pdf: $("f-pdf").checked, ordner: $("f-ordner").value, ueberschreiben,
+  });
+  knopf.disabled = false;
+  knopf.textContent = "Rechnung erstellen";
+  if (status === 409 && daten.existiert) {
+    if (confirm(daten.fehler + "\nÜberschreiben?")) return erstellen(true);
+    return;
+  }
+  erg.classList.remove("versteckt");
+  if (status !== 200) {
+    erg.className = "meldung fehler";
+    erg.textContent = "Fehler: " + (daten.fehler || status);
+    return;
+  }
+  erg.className = "meldung ok";
+  erg.replaceChildren();
+  const kopf = document.createElement("div");
+  const stark = document.createElement("strong"); stark.textContent = "Rechnung erstellt";
+  kopf.append(stark, ` · ${daten.brutto} brutto · zahlbar bis ${daten.faellig}`);
+  const pfad = document.createElement("div");
+  pfad.className = "info"; pfad.style.margin = "4px 0 10px"; pfad.textContent = daten.docx;
+  const zeile = document.createElement("div");
+  zeile.className = "zeile"; zeile.style.marginTop = "0";
+  const knopfMit = (text, ziel, finder) => {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.onclick = () => oeffnen(ziel, finder);
+    zeile.appendChild(b);
+  };
+  knopfMit("In Word öffnen", daten.docx, false);
+  if (daten.pdf) knopfMit("PDF öffnen", daten.pdf, false);
+  knopfMit("Im Finder zeigen", daten.docx, true);
+  erg.append(kopf, pfad, zeile);
+  if (daten.hinweise.length) {
+    const ul = document.createElement("ul");
+    ul.className = "hinweise";
+    erg.appendChild(ul);
+    hinweisListe(ul, daten.hinweise);
+  }
+  $("f-nummer").value = daten.naechste_nummer;
+  zeigeVorschlag(daten.naechste_nummer);
+  neuMarkiert = daten.docx;
+  ladeHistorie();
+}
+
+const ablage = $("ablage");
+ablage.onclick = () => $("datei").click();
+ablage.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") $("datei").click(); };
+$("datei").onchange = (e) => { if (e.target.files[0]) ladeAb(e.target.files[0]); e.target.value = ""; };
+["dragenter", "dragover"].forEach((t) => ablage.addEventListener(t, (e) => { e.preventDefault(); ablage.classList.add("ueber"); }));
+["dragleave", "drop"].forEach((t) => ablage.addEventListener(t, (e) => { e.preventDefault(); ablage.classList.remove("ueber"); }));
+ablage.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) ladeAb(f); });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+$("f-datum").oninput = faelligAktualisieren;
+$("f-nummer").onfocus = (e) => e.target.select();  // Tippen ersetzt den Vorschlag
+$("f-nummer").oninput = () => zeigeVorschlag(vorschlag);
+$("erstellen").onclick = () => erstellen(false);
+$("beenden").onclick = async () => {
+  await api("/api/beenden");
+  clearInterval(lebenszeichen);
+  document.querySelector("main").replaceChildren(Object.assign(document.createElement("div"),
+    {className: "karte", textContent: "CS Rechnung wurde beendet. Dieses Fenster kann geschlossen werden."}));
+};
+const lebenszeichen = setInterval(() => api("/api/ping"), 10000);
+function knopf(text, aktion) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = text; b.onclick = aktion;
+  return b;
+}
+
+async function oeffnen(pfad, finder) {
+  const {status, daten} = await api("/api/oeffnen", {pfad, finder});
+  if (status !== 200) alert(daten.fehler || "Konnte die Datei nicht öffnen.");
+}
+
+let historieDaten = [], neuMarkiert = null;
+
+function zeigeHistorie() {
+  const ziel = $("historie-liste");
+  const q = $("h-suche").value.trim().toLowerCase();
+  const liste = historieDaten.filter((e) => !q ||
+    [e.nummer, e.kunde, e.projekt, e.ab_nr, e.brutto].some((x) => (x || "").toLowerCase().includes(q)));
+  ziel.replaceChildren();
+  if (!liste.length) {
+    ziel.appendChild(Object.assign(document.createElement("div"), {className: "leer",
+      textContent: historieDaten.length ? "Keine Treffer." : "Noch keine Rechnungen im Ablageordner."}));
+    return;
+  }
+  const t = document.createElement("table");
+  t.innerHTML = '<thead><tr><th>Nr.</th><th>Kunde</th><th>Datum</th><th class="zahl">Brutto</th><th></th></tr></thead>';
+  const tb = document.createElement("tbody");
+  liste.forEach((e) => {
+    const tr = document.createElement("tr");
+    if (e.docx === neuMarkiert) tr.className = "neu";
+    const datum = e.rechnungsdatum ? deDatum(e.rechnungsdatum) : deDatum((e.erstellt || "").slice(0, 10));
+    const kunde = document.createElement("td");
+    kunde.textContent = e.kunde;
+    if (e.projekt) { const s = document.createElement("small"); s.textContent = e.projekt; kunde.appendChild(s); }
+    const zellen = [Object.assign(document.createElement("td"), {textContent: e.nummer}), kunde,
+      Object.assign(document.createElement("td"), {textContent: datum}),
+      Object.assign(document.createElement("td"), {textContent: e.brutto || "—", className: "zahl"})];
+    const akt = document.createElement("td");
+    akt.className = "aktionen";
+    akt.append(knopf("Word", () => oeffnen(e.docx, false)));
+    if (e.pdf) akt.append(knopf("PDF", () => oeffnen(e.pdf, false)));
+    akt.append(knopf("Finder", () => oeffnen(e.docx, true)));
+    zellen.push(akt);
+    tr.append(...zellen);
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  ziel.appendChild(t);
+}
+
+async function ladeHistorie() {
+  const {status, daten} = await api("/api/historie");
+  if (status === 200) { historieDaten = daten.eintraege; zeigeHistorie(); }
+}
+$("h-suche").oninput = zeigeHistorie;
+
+start();
+ladeHistorie();
+</script>
+</body>
+</html>

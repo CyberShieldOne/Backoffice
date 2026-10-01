@@ -1,0 +1,3 @@
+pdfplumber>=0.10
+# nur für tests/test_rechnung.py:
+reportlab>=4.0

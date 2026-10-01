@@ -1,0 +1,68 @@
+#!/bin/bash
+# Startprogramm von "CS Rechnung.app": richtet beim ersten Start eine eigene
+# Python-Umgebung ein (pdfplumber) und startet die Oberfläche im Browser.
+set -u
+APP="$(cd "$(dirname "$0")/../Resources/app" && pwd)"
+SUPPORT="$HOME/Library/Application Support/CS-Rechnung"
+VENV="$SUPPORT/venv"
+LOG="$SUPPORT/app.log"
+mkdir -p "$SUPPORT"
+exec >>"$LOG" 2>&1
+echo "=== Start $(date '+%Y-%m-%d %H:%M:%S')"
+
+meldung() {
+  /usr/bin/osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"CS Rechnung\" with icon caution" >/dev/null 2>&1 \
+    || echo "MELDUNG: $1"
+}
+hinweis() {
+  /usr/bin/osascript -e "display notification \"$1\" with title \"CS Rechnung\"" >/dev/null 2>&1 || echo "HINWEIS: $1"
+}
+
+# Python >= 3.9 suchen (Homebrew, python.org, Apple Command Line Tools)
+PY=""
+for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+         /Library/Frameworks/Python.framework/Versions/Current/bin/python3 \
+         /usr/bin/python3 "$(command -v python3 2>/dev/null)"; do
+  [ -n "$c" ] && [ -x "$c" ] || continue
+  if "$c" -c 'import sys, venv; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+    PY="$c"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  meldung "Python 3 fehlt. Bitte einmal im Terminal 'xcode-select --install' ausführen (oder Python von python.org installieren) und die App erneut starten."
+  exit 1
+fi
+echo "Python: $PY ($("$PY" --version 2>&1))"
+
+# Eigene Umgebung anlegen bzw. bei geänderten Abhängigkeiten erneuern
+STEMPEL="$VENV/.anforderungen"
+if [ ! -x "$VENV/bin/python" ] || ! cmp -s "$APP/requirements-app.txt" "$STEMPEL"; then
+  hinweis "Erster Start: richte Python-Umgebung ein (ca. 1 Minute) …"
+  rm -rf "$VENV"
+  if ! "$PY" -m venv "$VENV" \
+     || ! "$VENV/bin/python" -m pip install --disable-pip-version-check -q --upgrade pip \
+     || ! "$VENV/bin/python" -m pip install --disable-pip-version-check -q -r "$APP/requirements-app.txt"; then
+    rm -rf "$VENV"
+    meldung "Einrichtung fehlgeschlagen (Internetverbindung?). Details: ~/Library/Application Support/CS-Rechnung/app.log"
+    exit 1
+  fi
+  cp "$APP/requirements-app.txt" "$STEMPEL"
+fi
+
+# Server abgekoppelt starten und das Startprogramm sofort beenden: Solange es liefe, hielte macOS
+# die App für "geöffnet", und ein erneuter Doppelklick (z. B. nach Schließen des Tabs) täte nichts.
+# So startet jeder Doppelklick neu; app.py öffnet dann nur das Fenster der laufenden Instanz.
+nohup "$VENV/bin/python" "$APP/app.py" >>"$LOG" 2>&1 </dev/null &
+PID=$!
+for _ in 1 2 3 4 5 6; do
+  sleep 0.5
+  kill -0 "$PID" 2>/dev/null || break
+done
+if ! kill -0 "$PID" 2>/dev/null; then
+  wait "$PID"; RC=$?
+  if [ "$RC" -ne 0 ]; then
+    meldung "CS Rechnung konnte nicht starten (Fehler $RC). Details: ~/Library/Application Support/CS-Rechnung/app.log"
+    exit "$RC"
+  fi
+fi
+exit 0
