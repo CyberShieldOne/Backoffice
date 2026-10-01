@@ -41,7 +41,8 @@ STANDARD_ORDNER = Path.home() / "Documents" / "Rechnungen"
 # Programmstand: Prüfsumme über Code und Oberfläche. Eine laufende Instanz mit anderem Stand
 # (z. B. nach einem Update) wird beim Start beendet, damit nie alter Code mit neuer Oberfläche läuft.
 STAND = hashlib.sha256(b"".join(
-    (HIER / f).read_bytes() for f in ("app.py", "rechnung_aus_ab.py", "quelle_ariba.py", "ui/index.html")
+    (HIER / f).read_bytes() for f in ("app.py", "rechnung_aus_ab.py", "quelle_ariba.py", "woerterbuch.py",
+                                       "woerterbuch.json", "ui/index.html")
     if (HIER / f).exists())).hexdigest()[:16]
 UI_HTML = (HIER / "ui" / "index.html").read_text(encoding="utf-8")  # einmal laden: Oberfläche passt zum Code
 LEERLAUF_S = 300       # ohne Lebenszeichen der Seite → beenden (Browser drosseln Hintergrund-Tabs auf 1/min)

@@ -319,6 +319,24 @@ async function ladeAb(datei) {
   $("rechnung").classList.remove("versteckt");
 }
 
+// zurück zu Schritt 1: Beleg und kundenbezogene Eingaben verwerfen; Nummer (nächste freie),
+// Datum (heute), Ablageordner, PDF-Haken und Historie bleiben
+function weitereRechnung() {
+  abId = null;
+  zahlungsziel = 0;
+  belegVorgabe = {nummer: "", datum: ""};
+  ["auftrag", "rechnung", "ergebnis", "lesefehler", "lesehinweise"].forEach((id) => $(id).classList.add("versteckt"));
+  $("ablage").classList.remove("geladen");
+  ablageText("PDF hierher ziehen", "Auftragsbestätigung oder SAP-Ariba-Rechnung – oder klicken zum Auswählen");
+  ["f-bestellnr", "f-bestelldatum", "f-von", "f-bis", "f-uebergabe", "f-ustid", "f-angebot", "f-faellig"]
+    .forEach((id) => { $(id).value = ""; });
+  $("f-nummer").value = vorschlag;
+  zeigeVorschlag(vorschlag);
+  $("f-datum").value = heute;
+  window.scrollTo({top: 0, behavior: "smooth"});
+  $("ablage").focus({preventScroll: true});
+}
+
 async function erstellen(ueberschreiben = false) {
   const knopf = $("erstellen");
   const erg = $("ergebnis");
@@ -361,6 +379,11 @@ async function erstellen(ueberschreiben = false) {
   knopfMit("In Word öffnen", daten.docx, false);
   if (daten.pdf) knopfMit("PDF öffnen", daten.pdf, false);
   knopfMit("Im Finder zeigen", daten.docx, true);
+  const weiter = document.createElement("button");
+  weiter.type = "button"; weiter.id = "weitere"; weiter.className = "haupt";
+  weiter.textContent = "Weitere Rechnung erstellen";
+  weiter.onclick = weitereRechnung;
+  zeile.appendChild(weiter);
   erg.append(kopf, pfad, zeile);
   if (daten.hinweise.length) {
     const ul = document.createElement("ul");

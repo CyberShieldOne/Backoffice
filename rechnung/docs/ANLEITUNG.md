@@ -63,7 +63,9 @@ Erscheint trotzdem „Apple konnte nicht überprüfen …“: einmal `xattr -cr 
    | Angebotsnummer | leer – leer bedeutet: Verweis entfällt | leer |
    | Ablageordner | `~/Documents/Rechnungen` (letzter Ordner wird gemerkt) | ebenso |
 
-4. **„Rechnung erstellen“** klicken. Danach: *In Word öffnen*, *PDF öffnen* (falls erstellt), *Im Finder zeigen*.
+4. **„Rechnung erstellen“** klicken. Danach: *In Word öffnen*, *PDF öffnen* (falls erstellt), *Im Finder zeigen*,
+   **Weitere Rechnung erstellen** (zurück zu Schritt 1: Beleg und Kundendaten geleert, nächste freie Nummer und
+   heutiges Datum gesetzt, Ablageordner und PDF-Haken bleiben).
    Hinweise unter dem Ergebnis erklären, was fehlte oder weggelassen wurde.
 
 Dateiname: `<Rechnungsnummer>_Rechnung_<Kunde>.docx`, z. B. `2026-0142_Rechnung_OHB_SE.docx`.
@@ -122,7 +124,8 @@ Bei SAP-Rechnungen ist `--rechnungsnr` nicht nötig. Eine Datei, die zu einer an
 | „Python 3 fehlt …“ | im Terminal `xcode-select --install` oder Python von python.org installieren |
 | „Einrichtung fehlgeschlagen (Internetverbindung?)“ | erster Start ohne Internet → mit Internet erneut starten |
 | „Unbekannter Beleg …“ | PDF ist weder CS-AB noch SAP-Ariba-Standardrechnung |
-| „… nicht gefunden“ / „Summe der Positionen ≠ …“ | Beleg weicht vom bekannten Layout ab → Beleg an die Entwicklung geben |
+| „… nicht gefunden (Bezeichnungen laut woerterbuch.json: …)“ | Beleg nennt das Feld anders → Bezeichnung in `woerterbuch.json` ergänzen (Technik, Abschnitt 4.4) |
+| „Summe der Positionen ≠ …“ / sonst abweichender Aufbau | Beleg weicht vom bekannten Layout ab → Beleg an die Entwicklung geben |
 | „Keine Verbindung zu CS Rechnung“ | App wurde beendet → Dock-Symbol erneut anklicken |
 | PDF-Knopf fehlt / „PDF-Export fehlgeschlagen“ | LibreOffice fehlt oder ist gerade geöffnet → beenden, erneut erstellen; das DOCX ist trotzdem fertig |
 | Sonstiges | Protokoll: `~/Library/Application Support/CS-Rechnung/app.log` |

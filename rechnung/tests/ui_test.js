@@ -78,6 +78,20 @@ const path = require('path');
     await p.waitForFunction((n) => document.getElementById('ergebnis').textContent.includes(n), nr);
     pruefe((await p.textContent('#ergebnis')).includes('Rechnung erstellt'), 'SAP: Rechnung erstellt');
     pruefe(await p.inputValue('#f-nummer') === vorher, 'SAP-Nummer verändert das eigene Nummernschema nicht');
+    // "Weitere Rechnung erstellen": zurück zu Schritt 1, Kundendaten weg, Nummer/Datum/Ordner bereit
+    const ordner = await p.inputValue('#f-ordner');
+    const heute = await p.evaluate(() => heute);
+    await p.click('#weitere');
+    pruefe(await p.isHidden('#auftrag') && await p.isHidden('#rechnung') && await p.isHidden('#ergebnis'),
+           'Weitere: Schritte 2/3 und Ergebnis ausgeblendet');
+    pruefe((await p.textContent('#ablage')).includes('PDF hierher ziehen'), 'Weitere: Ablage wieder leer');
+    pruefe(await p.evaluate(() => document.activeElement.id) === 'ablage', 'Weitere: Ablage hat den Fokus');
+    pruefe(await p.inputValue('#f-ustid') === '' && await p.inputValue('#f-bestellnr') === ''
+           && await p.inputValue('#f-von') === '', 'Weitere: kundenbezogene Felder geleert');
+    pruefe(await p.inputValue('#f-nummer') === vorher, 'Weitere: nächste freie Nummer');
+    pruefe(await p.inputValue('#f-datum') === heute, 'Weitere: Rechnungsdatum heute statt SAP-Datum');
+    pruefe(await p.inputValue('#f-ordner') === ordner, 'Weitere: Ablageordner bleibt');
+    pruefe(await p.evaluate(() => abId === null), 'Weitere: alter Beleg verworfen');
     await p.setInputFiles('#datei', abB);
     await p.waitForFunction(() => document.getElementById('ablage').textContent.includes('Auftragsbestätigung'));
     pruefe(await p.inputValue('#f-nummer') === vorher, 'nach SAP-Beleg: AB bekommt wieder eigene Nummer');

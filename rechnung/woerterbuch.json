@@ -1,0 +1,240 @@
+{
+  "_info": [
+    "Wörterbuch der Feldbezeichnungen in den Belegen. Zu jedem Feld eine Liste gleichwertiger Bezeichnungen.",
+    "Neue Formulierung in einem Beleg? Hier eine Zeile ergänzen – keine Programmänderung nötig.",
+    "Regeln: Groß-/Kleinschreibung egal, Doppelpunkt nach der Bezeichnung optional, beliebige Leerzeichen/Zeilenumbrüche",
+    "zwischen den Wörtern. Bei mehreren passenden Bezeichnungen gewinnt die längste.",
+    "Tabellenköpfe ('tabelle'): jeweils ein einzelnes Wort, wie es im Kopf der Tabelle steht."
+  ],
+  "erkennung": {
+    "auftragsbestaetigung": {
+      "alle": [],
+      "eins_von": [
+        "Auftragsbestätigung",
+        "Auftragsbestaetigung",
+        "Auftragsbestatigung"
+      ]
+    },
+    "ariba_kopie": {
+      "alle": [
+        "Standardrechnung"
+      ],
+      "eins_von": [
+        "Lieferantenreferenznr"
+      ]
+    },
+    "ariba_druck": {
+      "alle": [
+        "Standardrechnung"
+      ],
+      "eins_von": [
+        "Ursprünglicher Bestellauftrag",
+        "RECHNUNGSANSCHRIFT"
+      ]
+    }
+  },
+  "ab": {
+    "titel": [
+      "Auftragsbestätigung",
+      "Auftragsbestaetigung"
+    ],
+    "kopf": {
+      "datum": [
+        "Datum",
+        "AB-Datum"
+      ],
+      "kunde": [
+        "Kunde",
+        "Auftraggeber"
+      ],
+      "anschrift": [
+        "Anschrift",
+        "Adresse",
+        "Kundenanschrift"
+      ],
+      "kunden_nr": [
+        "Kunden-Nr.",
+        "Kundennummer",
+        "Kundennr.",
+        "Kd.-Nr."
+      ],
+      "kontakt": [
+        "Kundenkontakt",
+        "Ansprechpartner Kunde",
+        "Ansprechpartner"
+      ],
+      "mail": [
+        "Kundenmail",
+        "Kunden-E-Mail"
+      ],
+      "rechnungsempf": [
+        "Rechnungsempf",
+        "Rechnungsempfänger",
+        "Rechnung an"
+      ],
+      "projekt": [
+        "Projekt",
+        "Betreff",
+        "Vorhaben"
+      ]
+    },
+    "bestellung": [
+      "Ihre Bestellung",
+      "Ihre Bestell-Nr.",
+      "Ihre Bestellnummer",
+      "Bestellnummer",
+      "Bestell-Nr."
+    ],
+    "liefertermin": [
+      "Liefertermin",
+      "Lieferdatum",
+      "Leistungstermin",
+      "Fertigstellung"
+    ],
+    "zahlungsziel": [
+      "Zahlungsziel",
+      "Zahlbar innerhalb",
+      "Zahlungsbedingung",
+      "Zahlungsbedingungen"
+    ],
+    "summe_netto": [
+      "Summe Auftrag (Netto)",
+      "Auftragssumme (Netto)",
+      "Gesamtsumme (Netto)",
+      "Summe (Netto)",
+      "Summe netto",
+      "Nettosumme",
+      "Auftragswert netto"
+    ],
+    "leistungsbeschreibung": [
+      "Leistungsbeschreibung",
+      "Beschreibung der Leistung",
+      "Leistungsumfang"
+    ],
+    "tabelle": {
+      "produkt": [
+        "Produkte",
+        "Produkt",
+        "Leistung",
+        "Bezeichnung",
+        "Artikel"
+      ],
+      "einheit": [
+        "Einheit",
+        "ME"
+      ],
+      "menge": [
+        "Menge",
+        "Anzahl"
+      ],
+      "summe": [
+        "Summe",
+        "Betrag",
+        "Gesamt",
+        "Gesamtpreis"
+      ]
+    }
+  },
+  "ariba": {
+    "rechnungsnummer": [
+      "Rechnungsnummer",
+      "Rechnungs-Nr."
+    ],
+    "rechnungsdatum": [
+      "Rechnungsdatum"
+    ],
+    "leistungszeitraum": [
+      "Leistungszeitraum",
+      "Servicezeitraum"
+    ],
+    "leistung_von": [
+      "Service-Startdatum",
+      "Startdatum",
+      "Leistungsbeginn"
+    ],
+    "leistung_bis": [
+      "Service-Enddatum",
+      "Enddatum",
+      "Leistungsende"
+    ],
+    "bestellnummer": [
+      "Bestellauftragsnr.",
+      "Ursprünglicher Bestellauftrag",
+      "Bestellauftragsnummer",
+      "Bestellnummer"
+    ],
+    "bestelldatum": [
+      "Bestellauftragsdatum",
+      "Bestelldatum"
+    ],
+    "zahlungsziel_tage": [
+      "Nettozahlungsbedingungen (Tage)",
+      "Nettobedingung",
+      "Nettozahlungsbedingung",
+      "Zahlungsziel"
+    ],
+    "netto": [
+      "Gesamtbetrag ohne Steuern",
+      "Nettobetrag gesamt"
+    ],
+    "steuer": [
+      "Gesamtbetrag der Steuern",
+      "Steuern insgesamt",
+      "Steuerbetrag gesamt"
+    ],
+    "faellig": [
+      "Fälliger Betrag",
+      "Zu zahlender Betrag"
+    ],
+    "ust_kunde": [
+      "Umsatzsteuer-/Steuernummer des Kunden",
+      "USt-IdNr. des Kunden"
+    ],
+    "kopf_anschrift": {
+      "rechnungsanschrift": [
+        "Rechnungsanschrift"
+      ],
+      "rechts_davon": [
+        "Zahlungsempfänger",
+        "Lieferant"
+      ]
+    },
+    "tabelle": {
+      "position": [
+        "Positionsnr.",
+        "Pos.-Nr.",
+        "Position"
+      ],
+      "beschreibung": [
+        "Teilenr.",
+        "Beschreibung"
+      ],
+      "menge": [
+        "Menge"
+      ],
+      "preis": [
+        "Preis",
+        "Einzelpreis"
+      ],
+      "zwischensumme": [
+        "Zwischensumme",
+        "Gesamtpreis"
+      ]
+    },
+    "position_details": [
+      "DETAILS",
+      "Servicedetails",
+      "Steuern, Ermäßigungen"
+    ],
+    "anschrift_ende": [
+      "Zahlungsbedingungen",
+      "RECHNUNGSABSENDER",
+      "VERSANDINFORMATIONEN",
+      "Steuernummer des Lieferanten"
+    ],
+    "tabelle_ende": [
+      "Steuerübersicht",
+      "Rechnungsübersicht"
+    ]
+  }
+}
