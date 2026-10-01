@@ -2,9 +2,11 @@
   "_info": [
     "Wörterbuch der Feldbezeichnungen in den Belegen. Zu jedem Feld eine Liste gleichwertiger Bezeichnungen.",
     "Neue Formulierung in einem Beleg? Hier eine Zeile ergänzen – keine Programmänderung nötig.",
-    "Regeln: Groß-/Kleinschreibung egal, Doppelpunkt nach der Bezeichnung optional, beliebige Leerzeichen/Zeilenumbrüche",
+    "Regeln: Groß-/Kleinschreibung egal, Doppelpunkt nach der Bezeichnung optional, beliebige Leerzeichen",
     "zwischen den Wörtern. Bei mehreren passenden Bezeichnungen gewinnt die längste.",
-    "Tabellenköpfe ('tabelle'): jeweils ein einzelnes Wort, wie es im Kopf der Tabelle steht."
+    "Tabellenköpfe ('tabelle'): jeweils ein einzelnes Wort, wie es im Kopf der Tabelle steht.",
+    "'position_details', 'tabelle_ende': die ganze Zeile, wie sie im Beleg steht.",
+    "Achtung JSON: Einträge mit Komma trennen, nach dem letzten Eintrag einer Liste kein Komma."
   ],
   "erkennung": {
     "auftragsbestaetigung": {
@@ -36,7 +38,8 @@
   "ab": {
     "titel": [
       "Auftragsbestätigung",
-      "Auftragsbestaetigung"
+      "Auftragsbestaetigung",
+      "Auftragsbestatigung"
     ],
     "kopf": {
       "datum": [
@@ -224,7 +227,7 @@
     "position_details": [
       "DETAILS",
       "Servicedetails",
-      "Steuern, Ermäßigungen"
+      "Steuern, Ermäßigungen und Zuschläge"
     ],
     "anschrift_ende": [
       "Zahlungsbedingungen",

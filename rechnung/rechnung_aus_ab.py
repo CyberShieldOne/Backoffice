@@ -89,6 +89,10 @@ def _parse_datum(text: str) -> dt.date:
     raise AbFehler(f"Datum nicht lesbar: {text!r}")
 
 
+# Rest einer Summenzeile nach der Bezeichnung: nur ein Betrag (für parse_betrag), sonst nichts
+SUMMENZEILE = (r"((?:EUR|€)?[ \t]*\d[\d. \t\u00a0\u202f\u2009]*(?:,(?:\d{1,2}|-{1,2}|–))?[ \t]*(?:€|EUR)?)[ \t]*$")
+
+
 def parse_betrag(text: str) -> Decimal:
     """'EUR 4.500,-' / '4500,00 €' / 'EUR 12.345,67' / '4 500,00 €' -> Decimal."""
     # Leerzeichen als Tausendertrenner (DIN 5008, auch U+00A0/U+202F/U+2009) entfernen
@@ -203,7 +207,7 @@ def _kopf_felder(words, x_rechts: float, y_bis: float) -> dict[str, str]:
     wie 'kunde', 'kunden_nr'); Folgezeilen ohne Bezeichnung gehören zum vorigen Feld."""
     felder: dict[str, str] = {}
     aktuell = None
-    regeln = [(feld, re.compile(r"^" + wb.rx("ab", "kopf", feld) + r"\s*:\s*(.*)$"))
+    regeln = [(feld, re.compile(r"^" + wb.rx("ab", "kopf", feld) + r"(?![A-Za-zÄÖÜäöüß])\s*:?\s*(.*)$"))
               for feld in wb.laden()["ab"]["kopf"]]
     for z in _zeilen([w for w in words if w["x0"] >= x_rechts and w["top"] < y_bis]):
         t = _text(z)
@@ -253,10 +257,9 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
     y_titel = zeilen[ab_zeile][0]["top"]
 
     # --- Kopfblock rechts -----------------------------------------------
-    datum_z = next((z for z in zeilen if z[0]["top"] < y_titel and any(
-        re.match(r"^" + wb.rx("ab", "kopf", "datum") + r"\s*:", _text(z[i:])) for i in range(len(z)))), None)
-    datum_w = next((w for i, w in enumerate(datum_z or []) if re.match(
-        r"^" + wb.rx("ab", "kopf", "datum") + r"\s*:", _text(datum_z[i:]))), None)
+    datum_rx = re.compile(r"^" + wb.rx("ab", "kopf", "datum") + r"\s*:")
+    datum_w = next((w for z in zeilen if z[0]["top"] < y_titel
+                    for i, w in enumerate(z) if datum_rx.match(_text(z[i:i + 3]))), None)
     x_rechts = (datum_w["x0"] - 5) if datum_w else breite * 0.5
     kopf = _kopf_felder(words, x_rechts, y_titel)
     for pflicht in ("datum", "kunde", "anschrift", "kunden_nr", "kontakt", "projekt"):
@@ -273,18 +276,25 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
     lese_hinweise: list[Hinweis] = []
     bestell_nr, bestell_datum = lies_bestellung(text, lese_hinweise)
     liefertermin = None
-    m = wb.suche(text, ("ab", "liefertermin"), r"([^\n]*\S[^\n]*)")
-    if m:
+    # Bezeichnung am Zeilenanfang (sonst träfe z. B. "Projekt: Fertigstellung …" das Synonym "Fertigstellung");
+    # der erste Treffer mit lesbarem Datum gewinnt
+    kandidaten = [m.group(1).strip() for m in
+                  wb.alle(text, ("ab", "liefertermin"), r"([^\n]*\S[^\n]*)", zeilenanfang=True, naechste_zeile=True)]
+    for k in kandidaten:
         try:
-            liefertermin = parse_datum(m.group(1))
+            liefertermin = parse_datum(k)
+            break
         except AbFehler:
-            lese_hinweise.append(Hinweis(f"Liefertermin '{m.group(1).strip()}' ist kein Datum – "
-                                         "Leistungsende bitte selbst angeben", "--bis"))
-    m = wb.suche(text, ("ab", "zahlungsziel"), r"[^\n\d]{0,30}?(\d+)\s*Tag")
+            pass
+    if kandidaten and liefertermin is None:
+        lese_hinweise.append(Hinweis(f"Liefertermin '{kandidaten[0]}' ist kein Datum – "
+                                     "Leistungsende bitte selbst angeben", "--bis"))
+    m = wb.suche(text, ("ab", "zahlungsziel"), r"[^\n\d]{0,30}?(\d+)\s*Tag", naechste_zeile=True)
     if not m:
         raise AbFehler("Zahlungsziel (N Tage): " + wb.nicht_gefunden("ab", "zahlungsziel"))
     zahlungsziel = int(m.group(1))
-    m = wb.suche(text, ("ab", "summe_netto"), r"([^\n]*\d[^\n]*)")
+    # nur eine Zeile, die aus Bezeichnung und Betrag besteht; die letzte zählt (Beschreibungen stehen davor)
+    m = next(reversed(list(wb.alle(text, ("ab", "summe_netto"), SUMMENZEILE, zeilenanfang=True))), None)
     if not m:
         raise AbFehler("Summe: " + wb.nicht_gefunden("ab", "summe_netto"))
     summe = parse_betrag(m.group(1))
@@ -319,7 +329,7 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
 def lies_bestellung(text: str, hinweise: list[Hinweis]) -> tuple[str, dt.date | None]:
     """Zeile 'Ihre Bestellung [Nr.] <Nummer> … [vom <Datum>]' → (Nummer, Datum).
     Nummer = erstes Wort mit einer Ziffer vor 'vom' (nicht 'per', 'Nr.', 'Email' …); Datum optional."""
-    m = re.search(wb.rx("ab", "bestellung") + r"(?![A-Za-zÄÖÜäöüß])([^\n]*)", text)
+    m = wb.suche(text, ("ab", "bestellung"), r"([^\n]*)")
     if not m:
         return "", None
     teile = re.split(r"\bvom\b", m.group(1), maxsplit=1)
@@ -369,8 +379,8 @@ def _lese_positionen(words, zeilen, zeilen_txt) -> list[Position]:
     b_menge = (k["einheit"]["x1"] + k["menge"]["x0"]) / 2
     b_summe = (k["menge"]["x1"] + k["summe"]["x0"]) / 2
 
-    ende_i = next((i for i in range(kopf_i + 1, len(zeilen_txt))
-                   if wb.beginnt_mit(zeilen_txt[i], "ab", "summe_netto")), len(zeilen_txt))
+    summe_rx = re.compile(r"^\s*" + wb.rx("ab", "summe_netto") + r"(?![A-Za-zÄÖÜäöüß])[ \t]*:?[ \t]*" + SUMMENZEILE)
+    ende_i = next((i for i in range(kopf_i + 1, len(zeilen_txt)) if summe_rx.match(zeilen_txt[i])), len(zeilen_txt))
 
     positionen: list[Position] = []
     roh: dict | None = None
@@ -943,7 +953,7 @@ def main(argv=None) -> int:
     except DateiExistiert as e:
         print(f"FEHLER: {e}" + ("" if e.fremd else " Ersetzen mit --ueberschreiben."), file=sys.stderr)
         return 3
-    except AbFehler as e:
+    except (AbFehler, wb.WoerterbuchFehler) as e:
         print(f"FEHLER (Beleg): {e}", file=sys.stderr)
         return 2
     a = r.auftrag

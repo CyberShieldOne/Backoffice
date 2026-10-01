@@ -130,7 +130,10 @@ def _anschrift(zeilen) -> tuple[str, str, str]:
             continue
         rechts = [w["x0"] for w in z if w["x0"] > links["x0"]
                   and wb.wort_passt(w["text"], "ariba", "kopf_anschrift", "rechts_davon")]
-        x_bis = min(rechts) if rechts else 1e9
+        if not rechts:   # ohne rechte Grenze liefe die Spalte in die Nachbaranschrift (Lieferant) hinein
+            raise ra.AbFehler("SAP-Rechnung: Spalte rechts neben 'Rechnungsanschrift' nicht erkannt – "
+                              + wb.nicht_gefunden("ariba", "kopf_anschrift", "rechts_davon"))
+        x_bis = min(rechts)
         ende = next((y[0]["top"] for y in zeilen if y[0]["top"] > z[0]["top"]
                      and wb.beginnt_mit(ra._text(y), "ariba", "anschrift_ende")), 1e9)
         return _adresse(_spalte(zeilen, links["x0"] - 2, x_bis - 2, z[0]["top"] + 2, ende))
@@ -160,19 +163,21 @@ def _positionen_roh(zeilen, zt) -> list[dict]:
     for z, t in zip(zeilen, zt):
         if z[0]["top"] <= pk[0]["top"] + 5:
             continue
-        if wb.beginnt_mit(t, "ariba", "tabelle_ende"):
+        if wb.ist_zeile(t, "ariba", "tabelle_ende"):
             break
-        if wb.beginnt_mit(t, "ariba", "position_details"):
+        if wb.ist_zeile(t, "ariba", "position_details"):
             sammeln = False
             continue
         menge = ra._text([w for w in z if x_menge - 2 <= w["x0"] < x_preis - 5])
         betraege = re.findall(r"[\d.]+,\d{2} EUR", ra._text([w for w in z if w["x0"] >= x_preis - 20]))
         beschr = ra._text([w for w in z if x_beschr - 2 <= w["x0"] < x_beschr_ende - 2])
-        # Mengenspalte: Beträge, die in die Spalte ragen (Druckansicht), abziehen; übrig bleiben muss
-        # eine Menge ("1", "1,5", "8 / (Monate)") – Steuer-/Summenzeilen ("19 %", "Steuer:") fallen raus
-        menge = re.sub(r"[\d.]+,\d{2}(?:\s*EUR)?", "", menge).strip()
-        ist_menge = re.fullmatch(r"\d+(?:,\d+)?(?:\s*/\s*\(?[^)]*\)?)?", menge) is not None
-        if betraege and ist_menge:                               # neue Position
+        # Mengenspalte: vorn eine Menge ("1", "1,50", "8 / (Monate)"), dahinter höchstens Beträge, die aus der
+        # Preisspalte hineinragen (Druckansicht). Steuer-/Summenzeilen ("19 %", "Steuer:") fallen raus, ebenso
+        # jede Zeile mit "%" außerhalb der Beschreibung (Steuersatz in Detailblöcken).
+        mm = re.fullmatch(r"(\d+(?:,\d+)?(?:\s*/\s*\([^)]*\))?)(?:\s+[\d.]+,\d{2}(?:\s*EUR)?)*", menge.strip())
+        ausserhalb = ra._text([w for w in z if not (x_beschr - 2 <= w["x0"] < x_beschr_ende - 2)])
+        if betraege and mm and "%" not in ausserhalb:            # neue Position
+            menge = mm.group(1)
             akt = {"beschr": [beschr] if beschr else [], "menge": _menge(menge),
                    "betrag": _betrag_eur(betraege[-1])}
             roh.append(akt)

@@ -9,6 +9,7 @@ Aufruf: python -m unittest tests/test_woerterbuch.py   (aus dem Ordner rechnung/
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import json
 import random
 import sys
@@ -49,13 +50,16 @@ DRUCK_SYNONYME = {
 
 
 @contextlib.contextmanager
-def umbenannt(synonyme: dict[str, str]):
-    """Beschriftungen beim Zeichnen ersetzen (Präfix-Treffer, längster zuerst)."""
+def umbenannt(synonyme: dict[str, str], genau: dict[str, str] | None = None):
+    """Beschriftungen beim Zeichnen ersetzen (Präfix-Treffer, längster zuerst; 'genau': ganzer Text)."""
+    genau = genau or {}
     orig = {n: getattr(canvas.Canvas, n) for n in ("drawString", "drawRightString", "drawCentredString")}
     schluessel = sorted(synonyme, key=len, reverse=True)
 
     def huelle(f):
         def neu(self, x, y, text, *a, **k):
+            if text in genau:
+                return f(self, x, y, genau[text], *a, **k)
             alt = next((s for s in schluessel if text.startswith(s)), None)
             if alt is not None:
                 text = synonyme[alt] + text[len(alt):]
@@ -154,6 +158,88 @@ class Woerterbuch(unittest.TestCase):
         m = wb.suche("Produkte Einheit Menge Summe (Netto)\nWorkshop 1 Tag 1 95,00 €\n",
                      ("ab", "summe_netto"), r"([^\n]*\d[^\n]*)")
         self.assertIsNone(m)
+
+
+class Review3(unittest.TestCase):
+    """Funde aus dem dritten xhigh-Review (Wörterbuch-Umbau)."""
+
+    def _ab(self, synonyme=None, genau=None, seed=42, **erzwinge):
+        t = tempfile.mkdtemp()
+        pfad = Path(t) / "ab.pdf"
+        with umbenannt(synonyme or {}, genau):
+            soll = gen.erzeuge_ab(pfad, random.Random(seed), erzwinge or None)
+        return pfad, soll
+
+    def test_titel_ohne_umlaut(self):
+        pfad, soll = self._ab({"Auftragsbestätigung": "Auftragsbestatigung"})
+        self.assertEqual(ra.lese_beleg(pfad).ab_nr, soll["ab_nr"])
+
+    def test_liefertermin_synonym_im_projekt(self):
+        pfad, soll = self._ab({"Projekt: ": "Projekt: Fertigstellung "}, mit_liefer=True, liefer_text=False)
+        a = ra.lese_beleg(pfad)
+        self.assertEqual(a.liefertermin, soll["liefertermin"])
+        self.assertFalse([h for h in a.hinweise if "Liefertermin" in str(h)])
+
+    def test_summe_ohne_leerzeichen_vor_klammer(self):
+        pfad, soll = self._ab({"Summe Auftrag (Netto)": "Summe Auftrag(Netto)"})
+        self.assertEqual(ra.lese_beleg(pfad).summe_netto, soll["summe_netto"])
+
+    def test_summenwort_in_position_ist_nicht_die_summe(self):
+        pfad, soll = self._ab(genau={p: "Nettosumme 1.000 € monatlich" for p, _ in gen.PRODUKTE})
+        a = ra.lese_beleg(pfad)
+        self.assertEqual(a.summe_netto, soll["summe_netto"])
+        self.assertEqual(len(a.positionen), len(soll["positionen"]))
+
+    def test_kopffeld_ohne_doppelpunkt(self):
+        pfad, soll = self._ab({"Kunden-Nr.:": "Kundennummer"})
+        self.assertEqual(ra.lese_beleg(pfad).kunden_nr, soll["kunden_nr"])
+
+    def test_bestellnummer_nicht_aus_laengerem_wort(self):
+        nr, datum = ra.lies_bestellung("Kundenbestellnummer: 999 vom 01.01.2025\nIhre Bestellung 4711 vom 02.02.2025", [])
+        self.assertEqual((nr, datum), ("4711", dt.date(2025, 2, 2)))
+        self.assertIsNone(wb.suche("Teilfertigstellung: 01.01.2026", ("ab", "liefertermin"), r"(\S+)"))
+
+    def test_zahlungsziel_in_naechster_zeile(self):
+        m = wb.suche("Zahlungsziel:\n14 Tage netto", ("ab", "zahlungsziel"), r"[^\n\d]{0,30}?(\d+)\s*Tag",
+                     naechste_zeile=True)
+        self.assertEqual(m.group(1), "14")
+
+    def test_sap_menge_mit_nachkommastellen(self):
+        with tempfile.TemporaryDirectory() as t:
+            for druck in (False, True):
+                with self.subTest(druck=druck):
+                    pfad = Path(t) / f"sap_{druck}.pdf"
+                    with umbenannt({}, {"1 / (1)": "1,50 / (Std.)"}):
+                        soll = (sap.erzeuge_ariba_druck if druck else sap.erzeuge_ariba)(pfad, random.Random(3))
+                    a = ra.lese_beleg(pfad)
+                    self.assertEqual([p.menge for p in a.positionen], ["1,50"] * len(soll["titel"]))
+                    self.assertEqual([p.betrag for p in a.positionen], soll["betraege"])
+
+    def test_sap_anschrift_ohne_rechte_spalte_bricht_ab(self):
+        with tempfile.TemporaryDirectory() as t:
+            pfad = Path(t) / "sap.pdf"
+            with umbenannt({}, {"LIEFERANT:": "VERKÄUFER:"}):
+                sap.erzeuge_ariba_druck(pfad, random.Random(5))
+            with self.assertRaisesRegex(ra.AbFehler, "rechts neben 'Rechnungsanschrift'"):
+                ra.lese_beleg(pfad)
+
+    def test_details_nur_als_eigene_zeile(self):
+        self.assertTrue(wb.ist_zeile("DETAILS", "ariba", "position_details"))
+        self.assertTrue(wb.ist_zeile("Servicedetails:", "ariba", "position_details"))
+        self.assertFalse(wb.ist_zeile("Details siehe Angebot Nummer 4711", "ariba", "position_details"))
+
+    def test_kaputtes_woerterbuch_klare_meldung(self):
+        alt = wb.DATEI
+        with tempfile.TemporaryDirectory() as t:
+            wb.DATEI = Path(t) / "woerterbuch.json"
+            wb.DATEI.write_text('{"ab": {"titel": ["Auftragsbestätigung",]}}', encoding="utf-8")
+            wb.neu_laden()
+            try:
+                with self.assertRaisesRegex(wb.WoerterbuchFehler, "Zeile 1"):
+                    wb.liste("ab", "titel")
+            finally:
+                wb.DATEI = alt
+                wb.neu_laden()
 
 
 if __name__ == "__main__":

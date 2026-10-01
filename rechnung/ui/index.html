@@ -319,9 +319,12 @@ async function ladeAb(datei) {
   $("rechnung").classList.remove("versteckt");
 }
 
-// zurück zu Schritt 1: Beleg und kundenbezogene Eingaben verwerfen; Nummer (nächste freie),
-// Datum (heute), Ablageordner, PDF-Haken und Historie bleiben
-function weitereRechnung() {
+// zurück zu Schritt 1: Beleg und kundenbezogene Eingaben verwerfen; Nummer (nächste freie) und Datum (heute)
+// frisch vom Server – die Seite kann über Mitternacht/Jahreswechsel offen sein; Ablageordner, PDF-Haken,
+// Historie bleiben
+async function weitereRechnung() {
+  const {status, daten} = await api("/api/start");
+  if (status === 200) { heute = daten.heute; vorschlag = daten.nummer; }
   abId = null;
   zahlungsziel = 0;
   belegVorgabe = {nummer: "", datum: ""};

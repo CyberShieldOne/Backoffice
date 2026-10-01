@@ -144,10 +144,21 @@ Kein KI-Dienst, keine Netzverbindung – nur Textvergleich.
 | `ariba` | SAP-Ariba: Kopffelder, Beträge, USt-IdNr., Anschriftsblock, Spaltenköpfe, Ende von Positionsdetails und Tabelle |
 
 Regeln (`woerterbuch.py`): Groß-/Kleinschreibung egal, Doppelpunkt nach der Bezeichnung optional, beliebiger
-Leerraum zwischen den Wörtern, die längste passende Bezeichnung gewinnt. Der Wert muss in derselben Zeile stehen
-(Ausnahmen im Code, z. B. SAP-Datum unter der Beschriftung) – sonst träfe ein Spaltenkopf wie „Summe (Netto)“ den
-Wert der Zeile darunter. Spaltenköpfe (`tabelle`) sind Einzelwörter. Fehlt ein Pflichtfeld, nennt die Meldung alle
-Bezeichnungen, nach denen gesucht wurde.
+Leerraum zwischen den Wörtern (auch keiner vor „(“), die längste passende Bezeichnung gewinnt, eine Bezeichnung
+beginnt nie mitten im Wort („Kundenbestellnummer“ ist keine „Bestellnummer“). Der Wert muss in derselben Zeile stehen
+(Ausnahmen: Zahlungsziel, Liefertermin, SAP-Datumsfelder dürfen in der Folgezeile stehen) – sonst träfe ein
+Spaltenkopf wie „Summe (Netto)“ den Wert der Zeile darunter. Zusätzliche Schutzregeln gegen Synonyme im Fließtext:
+
+| Feld | Regel |
+|---|---|
+| Liefertermin | Bezeichnung am Zeilenanfang; der erste Treffer mit lesbarem Datum zählt |
+| Summe netto (AB) | Zeile besteht nur aus Bezeichnung und Betrag; der letzte Treffer zählt (Positionen stehen davor) |
+| `position_details`, `tabelle_ende` (SAP) | die ganze Zeile ist die Bezeichnung („Details siehe Angebot“ beendet nichts) |
+| Spaltenköpfe (`tabelle`) | Einzelwörter |
+
+Fehlt ein Pflichtfeld, nennt die Meldung alle Bezeichnungen, nach denen gesucht wurde. Ist `woerterbuch.json`
+kein gültiges JSON oder eine Liste leer, meldet die App „woerterbuch.json ist fehlerhaft (Zeile …, Spalte …)“.
+Das Wörterbuch wird beim Start der App geladen und gilt bis zum Beenden.
 
 **Neue Bezeichnung ergänzen:** in `woerterbuch.json` an der passenden Liste eine Zeile anfügen, Tests laufen lassen
 (`tests/test_woerterbuch.py` prüft auch die Datei), App neu bauen. Die Prüfsumme (`STAND`) umfasst das Wörterbuch,

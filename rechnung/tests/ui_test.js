@@ -78,10 +78,23 @@ const path = require('path');
     await p.waitForFunction((n) => document.getElementById('ergebnis').textContent.includes(n), nr);
     pruefe((await p.textContent('#ergebnis')).includes('Rechnung erstellt'), 'SAP: Rechnung erstellt');
     pruefe(await p.inputValue('#f-nummer') === vorher, 'SAP-Nummer verändert das eigene Nummernschema nicht');
+    // ohne "Weitere": nächster Beleg direkt abgelegt → AB bekommt wieder eigene Nummer, Übergabe vorbelegt
+    await p.setInputFiles('#datei', abB);
+    await p.waitForFunction(() => document.getElementById('ablage').textContent.includes('Auftragsbestätigung'));
+    pruefe(await p.inputValue('#f-nummer') === vorher, 'nach SAP-Beleg: AB bekommt wieder eigene Nummer');
+    pruefe(await p.inputValue('#f-uebergabe') !== '', 'AB: Übergabedatum wieder vorbelegt');
+    // SAP-Beleg erneut (gleiche Datei → Rückfrage Überschreiben bestätigen), dann "Weitere"
+    await p.setInputFiles('#datei', sap);
+    await p.waitForFunction(() => document.getElementById('ablage').textContent.includes('SAP Ariba'));
+    p.once('dialog', d => d.accept());
+    await p.click('#erstellen');
+    await p.waitForSelector('#weitere');
     // "Weitere Rechnung erstellen": zurück zu Schritt 1, Kundendaten weg, Nummer/Datum/Ordner bereit
     const ordner = await p.inputValue('#f-ordner');
     const heute = await p.evaluate(() => heute);
+    await p.evaluate(() => { heute = '2000-01-01'; });  // Seite seit Tagen offen: Datum muss frisch vom Server kommen
     await p.click('#weitere');
+    await p.waitForFunction(() => document.getElementById('auftrag').classList.contains('versteckt'));
     pruefe(await p.isHidden('#auftrag') && await p.isHidden('#rechnung') && await p.isHidden('#ergebnis'),
            'Weitere: Schritte 2/3 und Ergebnis ausgeblendet');
     pruefe((await p.textContent('#ablage')).includes('PDF hierher ziehen'), 'Weitere: Ablage wieder leer');
@@ -94,8 +107,7 @@ const path = require('path');
     pruefe(await p.evaluate(() => abId === null), 'Weitere: alter Beleg verworfen');
     await p.setInputFiles('#datei', abB);
     await p.waitForFunction(() => document.getElementById('ablage').textContent.includes('Auftragsbestätigung'));
-    pruefe(await p.inputValue('#f-nummer') === vorher, 'nach SAP-Beleg: AB bekommt wieder eigene Nummer');
-    pruefe(await p.inputValue('#f-uebergabe') !== '', 'AB: Übergabedatum wieder vorbelegt');
+    pruefe(await p.isVisible('#rechnung'), 'Weitere: nächster Beleg lässt sich laden');
   }
 
   // Fund 6: Server weg → Meldung, Knopf wieder bedienbar

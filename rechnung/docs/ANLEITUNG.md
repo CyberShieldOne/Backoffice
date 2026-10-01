@@ -125,6 +125,7 @@ Bei SAP-Rechnungen ist `--rechnungsnr` nicht nötig. Eine Datei, die zu einer an
 | „Einrichtung fehlgeschlagen (Internetverbindung?)“ | erster Start ohne Internet → mit Internet erneut starten |
 | „Unbekannter Beleg …“ | PDF ist weder CS-AB noch SAP-Ariba-Standardrechnung |
 | „… nicht gefunden (Bezeichnungen laut woerterbuch.json: …)“ | Beleg nennt das Feld anders → Bezeichnung in `woerterbuch.json` ergänzen (Technik, Abschnitt 4.4) |
+| „woerterbuch.json ist fehlerhaft (Zeile …)“ | Tippfehler beim Ergänzen, meist Komma nach dem letzten Eintrag → an der genannten Stelle korrigieren, App beenden und neu starten |
 | „Summe der Positionen ≠ …“ / sonst abweichender Aufbau | Beleg weicht vom bekannten Layout ab → Beleg an die Entwicklung geben |
 | „Keine Verbindung zu CS Rechnung“ | App wurde beendet → Dock-Symbol erneut anklicken |
 | PDF-Knopf fehlt / „PDF-Export fehlgeschlagen“ | LibreOffice fehlt oder ist gerade geöffnet → beenden, erneut erstellen; das DOCX ist trotzdem fertig |

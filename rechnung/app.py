@@ -288,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._antwort(200, {"ok": True})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return None
-        except ra.AbFehler as e:
+        except (ra.AbFehler, ra.wb.WoerterbuchFehler) as e:
             return self._fehler(422, str(e))
         except Exception as e:  # noqa: BLE001
             return self._fehler(500, f"{type(e).__name__}: {e}")
@@ -463,6 +463,10 @@ def main(argv=None) -> int:
         print(url, flush=True)
         return 0
 
+    try:   # Wörterbuch beim Start laden: passt zu STAND und Code dieser Instanz (wie UI_HTML)
+        ra.wb.laden()
+    except ra.wb.WoerterbuchFehler as e:   # Instanz trotzdem starten – die Meldung erscheint beim Lesen
+        print(e, file=sys.stderr, flush=True)
     z = Zustand(secrets.token_urlsafe(16))
     Handler.zustand = z
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
