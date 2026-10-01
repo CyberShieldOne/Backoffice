@@ -495,24 +495,6 @@ def _positionszeilen(xml: str, r: Rechnung) -> str:
     return xml[:vorlage_tr.start()] + "".join(zeilen) + xml[vorlage_tr.end():]
 
 
-def _summentabelle_verbreitern(xml: str) -> str:
-    """Summenblock der Vorlage ist 3600 twips breit (Betragsspalte 1400) – zu schmal
-    für Beträge ab 1.000 €, Zeilenumbruch mitten in der Zahl. Auf 5800 (3200/2600)."""
-    i = xml.find("RECHNUNGSBETRAG")
-    s = xml.rfind("<w:tbl>", 0, i)
-    e = xml.find("</w:tbl>", i)
-    if i < 0 or s < 0 or e < 0:
-        return xml
-    t = xml[s:e]
-    t = t.replace('<w:tblW w:w="3600"', '<w:tblW w:w="5800"')
-    t = t.replace('<w:gridCol w:w="2200"/><w:gridCol w:w="1400"/>',
-                  '<w:gridCol w:w="3200"/><w:gridCol w:w="2600"/>')
-    t = t.replace('<w:tcW w:w="2200"', '<w:tcW w:w="3200"')
-    t = t.replace('<w:tcW w:w="1400"', '<w:tcW w:w="2600"')
-    t = t.replace('<w:tcW w:w="3600"', '<w:tcW w:w="5800"')
-    return xml[:s] + t + xml[e:]
-
-
 def _infozeile_bestellung(xml: str) -> str:
     """Infoblock rechts oben (Rechnungsnummer … Kundennummer) um 'Ihre Bestellung' ergänzen:
     Zeile 'Kundennummer' klonen, Beschriftung tauschen, Wert als Platzhalter [BESTELLUNG]."""
@@ -578,7 +560,6 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
 
     doc = dateien["word/document.xml"].decode("utf-8")
     doc = _positionszeilen(doc, r)
-    doc = _summentabelle_verbreitern(doc)
     if r.bestell_nr:
         doc = _infozeile_bestellung(doc)
     doc = ersetze(doc, regeln_global)

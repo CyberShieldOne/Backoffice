@@ -164,6 +164,25 @@ class Vorlage(unittest.TestCase):  # Fußzeile, Webseite, Schrift
             self.assertIn('w:ascii="Calibri"', stile)
             self.assertNotIn("Carlito", stile)
 
+    def test_einheitliche_ausrichtung(self):
+        """Word-2013-Modus: tblInd verschiebt Kästen → kein Einzug; Tabellen = Satzspiegel."""
+        import re
+        import zipfile
+        with tempfile.TemporaryDirectory() as t:
+            pfad, _ = ab_pdf(Path(t))
+            erg = ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=Path(t) / "r.docx")
+            with zipfile.ZipFile(erg.docx) as z:
+                doc = z.read("word/document.xml").decode()
+        self.assertNotIn("<w:tblInd", doc)
+        breiten = re.findall(r'<w:tblW w:w="(\d+)"', doc)
+        self.assertTrue(set(breiten) <= {"10206", "5800"}, breiten)  # Satzspiegel bzw. Summenblock
+        # Positionstabelle: Text der ersten/letzten Spalte bündig mit dem Fließtext
+        pos = next(m.group(0) for m in re.finditer(r"<w:tbl>.*?</w:tbl>", doc, re.S) if "Bezeichnung der Leistung" in m.group(0))
+        for tr in re.findall(r"<w:tr[ >].*?</w:tr>", pos, re.S):
+            tcs = re.findall(r"<w:tcPr>.*?</w:tcPr>", tr)
+            self.assertIn('<w:left w:w="0"', tcs[0])
+            self.assertIn('<w:right w:w="0"', tcs[-1])
+
 
 class Hinweise(unittest.TestCase):  # Fund 14
     def test_ui_ohne_standardwerte_und_cli_optionen(self):
