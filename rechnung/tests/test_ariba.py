@@ -156,6 +156,112 @@ def erzeuge_ariba(pfad: Path, rnd: random.Random) -> dict:
                 titel=[p[0] for p in pos], betraege=[p[2] for p in pos])
 
 
+def erzeuge_ariba_druck(pfad: Path, rnd: random.Random, anzahl: int | None = None) -> dict:
+    """SAP-Ariba-Druckansicht (US-Letter, Seitenzähler "n/m") im Layout von RE-2026-09-30-03."""
+    kunde = rnd.choice(KUNDEN)
+    rdatum = dt.date(2026, 1, 1) + dt.timedelta(days=rnd.randint(31, 270))
+    von = (rdatum.replace(day=1) - dt.timedelta(days=1)).replace(day=1)   # Vormonat
+    bis = rdatum.replace(day=1) - dt.timedelta(days=1)
+    nr = f"RE-{rdatum:%Y-%m-%d}-{rnd.randint(1, 20):02d}"
+    po = str(rnd.randint(4500000000, 4599999999))
+    tage = rnd.choice([30, 45, 60, 90])
+    ust_id = f"DE{rnd.randint(100000000, 999999999)}"
+    pos = []
+    for _ in range(anzahl or rnd.choice([1, 1, 2, 3])):
+        titel, teile = rnd.choice(LEISTUNGEN)
+        betrag = Decimal(rnd.randint(5, 300) * 100) + Decimal(rnd.choice([0, 0, 50, 99])) / 100
+        pos.append((titel, rnd.sample(teile, rnd.randint(1, len(teile))), betrag))
+    netto = sum((p[2] for p in pos), Decimal("0"))
+    steuer = ra.ust_von(netto)
+    eur = lambda b: ra.fmt_betrag(b).replace(" €", " EUR")  # noqa: E731
+    W, H = 612, 792
+    c = canvas.Canvas(str(pfad), pagesize=(W, H))
+    st = {"seite": 1, "top": 0.0}
+
+    def t(x, top, s, size=8, rechts=False):
+        c.setFont("Helvetica", size)
+        (c.drawRightString if rechts else c.drawString)(x, H - top - size * 0.8, s)
+
+    def neue_seite():
+        t(300, 770, f"{st['seite']}/9")
+        c.showPage()
+        st["seite"] += 1
+        return 50.0
+
+    t(43, 50, "Standardrechnung", 16)
+    t(53, 88, "Rechnungsnummer:")
+    t(154, 88, nr)
+    t(154, 102, f"Mittwoch, {de(rdatum)}, 9:30 Uhr GMT+02:")
+    t(53, 107, "Rechnungsdatum:")
+    t(154, 112, "00")
+    t(53, 126, f"Ursprünglicher Bestellauftrag: {po}")
+    for i, (lab, wert) in enumerate([("Zwischensumme:", eur(netto)), ("Steuern insgesamt:", eur(steuer)),
+                                     ("Gesamtbetrag ohne Steuern:", eur(netto)), ("Fälliger Betrag:", eur(netto + steuer))]):
+        t(43, 160 + i * 14, lab)
+        t(330, 160 + i * 14, wert, rechts=True)
+    t(43, 230, "Dieses Dokument ist digital unterzeichnet.")
+    t(43, 300, "Leistungszeitraum")
+    if rnd.random() < 0.5:   # wie im Original: Datum unter der Beschriftung
+        t(43, 312, "Startdatum:"), t(43, 322, de(von)), t(43, 334, "Enddatum:"), t(43, 344, de(bis))
+    else:
+        t(43, 312, f"Startdatum: {de(von)}"), t(43, 324, f"Enddatum: {de(bis)}")
+    t(43, 385, "ZAHLUNGSEMPFÄNGER:"), t(214, 385, "RECHNUNGSANSCHRIFT:"), t(386, 385, "LIEFERANT:")
+    links = ["CS Cyber Shield GmbH", "", "Postanschrift:", "Am Mühlzaun 1", "63571 Gelnhausen", "Hessen", "Deutschland"]
+    mitte = [kunde[0], "", "Postanschrift (Standardwert):", kunde[1], f"{kunde[3]} {kunde[2]}"] + \
+        ([kunde[4]] if kunde[4] else []) + ["Deutschland", "Adressen-ID: 1000"]
+    for i in range(max(len(links), len(mitte))):
+        if i < len(links) and links[i]:
+            t(43, 399 + i * 13.5, links[i]), t(386, 399 + i * 13.5, links[i])
+        if i < len(mitte) and mitte[i]:
+            t(214, 399 + i * 13.5, mitte[i])
+    t(43, 560, "RECHNUNGSABSENDER:"), t(214, 560, "KUNDE:")
+    t(43, 574, "CS Cyber Shield GmbH"), t(214, 574, kunde[0])
+    t(43, 640, "Zahlungsbedingungen:")
+    t(43, 652, f"Nettobedingung: {tage} Tage")
+    t(43, 680, "Umsatzsteuer-/Steuernummer des Lieferanten: DE363562591")
+    t(43, 692, f"Umsatzsteuer-/Steuernummer des Kunden: {ust_id}")
+    top = neue_seite()
+    t(43, top, f"Ursprünglicher Bestellauftrag: {po}")
+    top += 20
+    for x, s in [(46, "Positionsnr."), (99, "Positionsverweisnr."), (158, "Teilenr. / Beschreibung"),
+                 (408, "Menge / Einheit"), (458, "Preis pro Mengeneinheit"), (530, "Zwischensumme")]:
+        t(x, top, s, 5)
+    top += 18
+    for i, (titel, teile, betrag) in enumerate(pos, 1):
+        beschr = gen._umbrechen(f"Cyber Shield – {titel} - " + " - ".join(teile), 70)
+        if top + 30 + 14 * len(beschr) > 740:
+            top = neue_seite()
+        t(99, top, str(i * 2)), t(408, top, "1 / (1)"), t(458, top, eur(betrag)), t(530, top, eur(betrag))
+        t(160, top + 2, "Not Available")
+        top += 18
+        for j, z in enumerate(beschr):
+            t(160, top, z)
+            if j == 0:
+                t(61, top + 3, str(i))
+            if j == 1:
+                t(62, top + 6, "SERVICE")
+            top += 13.5
+        top += 18
+        t(49, top, "DETAILS")
+        t(55, top + 14, f"Startdatum: {de(von)} Enddatum: {de(bis)}")
+        t(55, top + 40, "Steuerdetails:")
+        t(55, top + 60, f"Umsatzsteuer 19 % {eur(betrag)} {eur(ra.ust_von(betrag))}")
+        top += 90
+    if top > 620:
+        top = neue_seite()
+    t(43, top, "Steuerübersicht")
+    t(55, top + 14, f"Umsatzsteuer 19 % {eur(netto)} {eur(steuer)}")
+    t(43, top + 40, "Rechnungsübersicht")
+    for i, (lab, wert) in enumerate([("Zwischensumme:", eur(netto)), ("Steuern insgesamt:", eur(steuer)),
+                                     ("Gesamtbetrag ohne Steuern:", eur(netto)), ("Fälliger Betrag:", eur(netto + steuer))]):
+        t(560, top + 56 + i * 14, f"{lab} {wert}", rechts=True)
+    t(300, 770, f"{st['seite']}/9")
+    c.save()
+    return dict(nr=nr, rdatum=rdatum, von=von, bis=bis, po=po, po_datum=None, tage=tage, ust_id=ust_id,
+                kunde=kunde[0], strasse=kunde[1], plz_ort=f"{kunde[3]} {kunde[2]}", netto=netto,
+                titel=[p[0] for p in pos], betraege=[p[2] for p in pos])
+
+
 class Ariba(unittest.TestCase):
     def test_zehn_iterationen(self):
         """10 Iterationen × 5 synthetische SAP-Rechnungen: lesen, Rechnung erzeugen, prüfen."""
@@ -164,9 +270,10 @@ class Ariba(unittest.TestCase):
             for it in range(1, 11):
                 rnd = random.Random(1000 + it)
                 for j in range(5):
-                    with self.subTest(iteration=it, beleg=j):
+                    druck = j % 2 == 1   # abwechselnd Kopie und Druckansicht
+                    with self.subTest(iteration=it, beleg=j, druck=druck):
                         pfad = t / f"sap_{it}_{j}.pdf"
-                        soll = erzeuge_ariba(pfad, rnd)
+                        soll = (erzeuge_ariba_druck if druck else erzeuge_ariba)(pfad, rnd)
                         a = ra.lese_beleg(pfad)
                         self.assertEqual(a.quelle, "SAP Ariba")
                         self.assertEqual((a.rechnungsnr, a.rechnungsdatum, a.leistung_von, a.leistung_bis),
@@ -182,7 +289,7 @@ class Ariba(unittest.TestCase):
                         text = gen.dokument_text(erg.docx)
                         self.assertEqual(ra.PLATZHALTER_RX.findall(text), [])
                         self.assertIn(f"Rechnungsnummer  {soll['nr']}", text)
-                        self.assertIn(f"Ihre Bestellung  {soll['po']} vom", text)
+                        self.assertIn(f"Ihre Bestellung  {soll['po']}" + (" vom" if soll["po_datum"] else ""), text)
                         self.assertIn(f"USt-IdNr. des Empfängers: {soll['ust_id']}", text)
                         self.assertIn("elektronisch über SAP Ariba übermittelt", text)
                         self.assertIn(ra.fmt_betrag(soll["netto"] + ra.ust_von(soll["netto"])), text)
@@ -191,6 +298,19 @@ class Ariba(unittest.TestCase):
                         self.assertNotIn("Kundennummer", text)
                         self.assertNotIn("z. Hd.", text)
                         self.assertEqual(erg.rechnung.faellig, soll["rdatum"] + dt.timedelta(days=soll["tage"]))
+
+    def test_druckansicht_mehrseitig(self):
+        """Druckansicht mit 6 Positionen über mehrere Seiten (Seitenzähler n/m dazwischen)."""
+        import pdfplumber
+        with tempfile.TemporaryDirectory() as t:
+            pfad = Path(t) / "lang.pdf"
+            soll = erzeuge_ariba_druck(pfad, random.Random(3), anzahl=6)
+            with pdfplumber.open(str(pfad)) as pdf:
+                self.assertGreaterEqual(len(pdf.pages), 3)
+            a = ra.lese_beleg(pfad)
+            self.assertEqual([p.titel for p in a.positionen], soll["titel"])
+            self.assertEqual([p.betrag for p in a.positionen], soll["betraege"])
+            self.assertTrue(all("/9" not in p.beschreibung for p in a.positionen))
 
     def test_ab_weiterhin_mit_bericht_und_ab(self):
         """Gegenprobe: eine AB erzeugt weiterhin Auftragsbestätigungs- und Bericht/Roadmap-Sätze."""

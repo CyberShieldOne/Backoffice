@@ -1,6 +1,6 @@
 # CS Rechnung – Technische Dokumentation
 
-Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
+Stand: Version 1.9 (Branch `claude/invoice-template-script-1snhqe`).
 
 ## 1. Überblick
 
@@ -95,7 +95,7 @@ Erkennung am Text der ersten Seite:
 
 | Merkmal | Leser |
 |---|---|
-| „Standardrechnung“ **und** „Lieferantenreferenznr“ | `quelle_ariba.lese_ariba` |
+| „Standardrechnung“ **und** („Lieferantenreferenznr“ **oder** „Ursprünglicher Bestellauftrag“/„RECHNUNGSANSCHRIFT“) | `quelle_ariba.lese_ariba` |
 | „Auftragsbest…“ | `lese_ab` |
 | sonst | Fehler „Unbekannter Beleg“ |
 
@@ -110,7 +110,13 @@ Ergebnis ist ein `Auftrag`-Objekt.
 - Produkttabelle über die Spaltenköpfe `Produkte / Einheit / Menge / Summe`; `Leistungsbeschreibung:` bis `Summe Auftrag`.
 - Fußzeile (unterste 8 % jeder Seite) wird ignoriert; mehrseitige ABs werden zusammengesetzt.
 
-**SAP-Ariba-Rechnung (`lese_ariba`)**
+**SAP-Ariba-Rechnung (`lese_ariba`)** – SAP Ariba gibt dieselbe Rechnung in zwei Formen aus, beide werden erkannt:
+
+| Ausgabeform | Merkmal | Vorlage | Besonderheit |
+|---|---|---|---|
+| Kopie („von Menschen lesbare Darstellung“) | „Lieferantenreferenznr.“ | RE-2026-09-30-05 | enthält Bestelldatum |
+| Druckansicht aus dem Portal (US-Letter, Seitenzähler „n/m“) | „Ursprünglicher Bestellauftrag“, „RECHNUNGSANSCHRIFT:“ | RE-2026-09-30-03 | **kein** Bestelldatum (Hinweis, Feld in der App leer) |
+
 - Rechnungsnummer, Rechnungsdatum, Service-Start/-Ende, Bestellauftragsnr./-datum, Nettozahlungsbedingungen (Tage).
 - USt-IdNr. des Kunden (zweite Kennung in der Zeile unter „Umsatzsteuer-/Steuernummer“).
 - Empfänger aus „Rechnungsanschrift“ (Spalte zwischen „Rechnungsanschrift“ und „Zahlungsempfänger“; Region-Zeile wird übersprungen).
@@ -212,7 +218,7 @@ Wird ohne PDF überschrieben, wird das veraltete PDF entfernt.
 
 ```bash
 cd rechnung
-./macos/build_app.sh 1.8        # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
+./macos/build_app.sh 1.9        # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
 ```
 
 Das Bundle enthält `rechnung_aus_ab.py`, `quelle_ariba.py`, `app.py`, `ui/index.html`, die Vorlage und

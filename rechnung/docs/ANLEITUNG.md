@@ -45,7 +45,8 @@ Erscheint trotzdem „Apple konnte nicht überprüfen …“: einmal `xattr -cr 
 
 ## 2. Rechnung erstellen
 
-1. **Beleg hineinziehen** (oder Feld anklicken und auswählen): Auftragsbestätigung **oder** SAP-Ariba-Rechnung als PDF.
+1. **Beleg hineinziehen** (oder Feld anklicken und auswählen): Auftragsbestätigung **oder** SAP-Ariba-Rechnung als PDF
+   (beide Ariba-Ausgaben: „Kopie“ und Druckansicht aus dem Portal; die Druckansicht enthält kein Bestelldatum).
    Die App erkennt die Belegart selbst und zeigt sie an, z. B. „✓ RE-2026-09-30-05.pdf (SAP Ariba)“.
 2. **Prüfen** unter „Aus dem Beleg gelesen“: Kunde, Anschrift, Beleg- und Bestellnummer, Positionen, Netto/USt/Brutto.
 3. **Rechnungsdaten ergänzen** (alle Felder änderbar):
