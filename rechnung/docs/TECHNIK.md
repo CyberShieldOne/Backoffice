@@ -72,7 +72,8 @@ Unter Linux (Entwicklung/Tests) liegt die Datei unter `$XDG_CONFIG_HOME/cs-rechn
 - `ThreadingHTTPServer` auf `127.0.0.1`, zufälliger Port, zufälliges Token (`secrets.token_urlsafe`).
 - Seite: `GET /<token>/`; alle API-Aufrufe `POST` mit Kopfzeile `X-Token` (sonst 403).
 - **Programmstand:** Prüfsumme über `app.py`, `rechnung_aus_ab.py`, `quelle_ariba.py` und `ui/index.html`
-  (`STAND`, Antwort von `/api/ping-frei`). Findet ein Start eine laufende Instanz mit anderem Stand – typisch nach einem
+  (`STAND`, Antwort von `/api/ping-frei`). Läuft bereits eine Instanz gleichen Stands, wird sie wiederverwendet (auch mit `--kein-browser`; nie zwei Instanzen,
+  die dieselbe `einstellungen.json` schreiben). Findet ein Start eine laufende Instanz mit anderem Stand – typisch nach einem
   Update ohne vorheriges Beenden –, beendet er sie und startet neu. Die Oberfläche wird beim Serverstart einmal geladen,
   damit Code und Oberfläche immer zusammenpassen.
 - Beenden: Knopf „Beenden“, oder 5 Minuten ohne Lebenszeichen der Seite (Ping alle 10 s), oder 3 Minuten ohne
@@ -181,6 +182,10 @@ Wird ohne PDF überschrieben, wird das veraltete PDF entfernt.
   beginnt die Zählung im aktuellen Jahr bei 1.
 - `letzte_nummer` bewegt sich nur vorwärts (Korrektur einer alten Rechnung setzt den Vorschlag nicht zurück).
 - Dubletten: gleiche Nummer für anderen Kunden im Ablageordner → abgelehnt; gleiche Datei → Rückfrage.
+- Dateinamen sind verlustbehaftet (`Acme & Partner` und `Acme Partner`, `RE 2026/77` und `RE_2026_77` ergeben denselben
+  Namen). Jede erzeugte Rechnung trägt deshalb in den Dokumenteigenschaften (`docProps/core.xml`, `dc:identifier`)
+  Rechnungsnummer und Kunde im Original. Gehört eine vorhandene Datei gleichen Namens zu einer anderen Rechnung,
+  wird nicht überschrieben – auch nicht nach Bestätigung.
 
 ## 6. Sicherheit
 

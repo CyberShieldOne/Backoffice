@@ -350,6 +350,12 @@ class Handler(BaseHTTPRequestHandler):
         fremd = [f.name for f in ordner.glob(praefix + "*.docx") if f.name != ziel.name] if ordner.is_dir() else []
         if fremd:
             return self._fehler(409, f"Rechnungsnummer {nr} ist bereits vergeben ({fremd[0]}).")
+        if ziel.exists():
+            # Dateiname ist verlustbehaftet → Identität aus den Dokumenteigenschaften prüfen
+            ident = ra.rechnungs_identitaet(ziel)
+            if ident and ident != (nr, a.kunde):
+                return self._fehler(409, f"{ziel.name} gehört zu Rechnung {ident[0]} für {ident[1]} – "
+                                         "bitte Rechnungsnummer ändern.")
         if ziel.exists() and not d.get("ueberschreiben"):
             return self._antwort(409, {"fehler": f"{ziel.name} existiert bereits.", "existiert": True})
         try:
@@ -438,8 +444,10 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     url = laufender_server()
-    if url and not args.kein_browser:
-        webbrowser.open(url)
+    if url:  # gleiche Version läuft schon: wiederverwenden, nie eine zweite Instanz (gemeinsame Einstellungen)
+        if not args.kein_browser:
+            webbrowser.open(url)
+        print(url, flush=True)
         return 0
 
     z = Zustand(secrets.token_urlsafe(16))

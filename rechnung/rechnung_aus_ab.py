@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import html
+import json
 import re
 import shutil
 import subprocess
@@ -634,6 +635,9 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
         if re.match(r"word/(header|footer)\d*\.xml$", name):
             dateien[name] = ersetze(dateien[name].decode("utf-8"), regeln_global).encode("utf-8")
 
+    if "docProps/core.xml" in dateien:
+        dateien["docProps/core.xml"] = _kenndaten(dateien["docProps/core.xml"].decode("utf-8"), r).encode("utf-8")
+
     ct = dateien["[Content_Types].xml"].decode("utf-8")
     ct = ct.replace("wordprocessingml.template.main+xml", "wordprocessingml.document.main+xml")
     dateien["[Content_Types].xml"] = ct.encode("utf-8")
@@ -646,6 +650,34 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
     with zipfile.ZipFile(ziel, "w", zipfile.ZIP_DEFLATED) as zout:
         for name, daten in dateien.items():
             zout.writestr(infos[name], daten, compress_type=zipfile.ZIP_DEFLATED)
+
+
+def _kenndaten(core: str, r: "Rechnung") -> str:
+    """Dokumenteigenschaften: Titel/Betreff lesbar, dc:identifier mit Rechnungsnummer und Kunde im
+    Original (Dateinamen sind verlustbehaftet: 'Acme & Partner' und 'Acme Partner' ergeben denselben)."""
+    ident = html.escape(json.dumps({"rechnungsnr": r.nr, "kunde": r.auftrag.kunde}, ensure_ascii=False), quote=False)
+    titel = html.escape(f"Rechnung {r.nr}", quote=False)
+    core = re.sub(r"<dc:title>.*?</dc:title>", f"<dc:title>{titel}</dc:title>", core, flags=re.S)
+    core = re.sub(r"<dc:(subject|identifier)>.*?</dc:\1>", "", core, flags=re.S)
+    zusatz = (f"<dc:subject>{html.escape(r.auftrag.kunde, quote=False)}</dc:subject>"
+              f"<dc:identifier>{ident}</dc:identifier>")
+    if "<dc:title>" in core:
+        return core.replace("</dc:title>", "</dc:title>" + zusatz, 1)
+    return core.replace("</cp:coreProperties>", zusatz + "</cp:coreProperties>", 1)
+
+
+def rechnungs_identitaet(docx: Path) -> tuple[str, str] | None:
+    """(Rechnungsnummer, Kunde) einer von diesem Programm erzeugten Rechnung, sonst None."""
+    try:
+        with zipfile.ZipFile(docx) as z:
+            core = z.read("docProps/core.xml").decode("utf-8")
+        m = re.search(r"<dc:identifier>(.*?)</dc:identifier>", core, re.S)
+        if not m:
+            return None
+        d = json.loads(html.unescape(m.group(1)))
+        return d["rechnungsnr"], d["kunde"]
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
 
 
 PLATZHALTER_RX = re.compile(r"\[[^\]\[]{0,40}\]")

@@ -340,6 +340,43 @@ class Server(unittest.TestCase):
         self.faden.join(5)
         self.assertFalse(tmp.exists(), "Temp-Ordner muss beim Beenden weg sein")
 
+    def test_dateinamen_kollision_ueberschreibt_keine_fremde_rechnung(self):  # Codex P1
+        a_pdf, _ = ab_pdf(self.t, "a.pdf", seed=1)
+        st, d = self.lesen(a_pdf)
+        kunde = d["auftrag"]["kunde"]
+        self.assertEqual(self.erstellen(d["id"], "RE 2026/77")[0], 200)
+        # andere Nummer, gleicher Dateiname (RE_2026_77): darf nicht überschreiben – auch mit Bestätigung
+        st, f = self.erstellen(d["id"], "RE_2026_77", ueberschreiben=True)
+        self.assertEqual(st, 409)
+        self.assertIn("gehört zu Rechnung RE 2026/77", f["fehler"])
+        self.assertNotIn("existiert", f)
+        # gleiche Rechnung (Nummer + Kunde): Rückfrage, dann überschreibbar
+        st, f = self.erstellen(d["id"], "RE 2026/77")
+        self.assertEqual((st, f.get("existiert")), (409, True))
+        self.assertEqual(self.erstellen(d["id"], "RE 2026/77", ueberschreiben=True)[0], 200)
+        # Kunde, der nur durch Sonderzeichen abweicht: Identität aus den Dokumenteigenschaften
+        ziel = self.ordner / ra.rechnungs_dateiname("RE 2026/77", kunde)
+        self.assertEqual(ra.rechnungs_identitaet(ziel), ("RE 2026/77", kunde))
+        a = ra.lese_beleg(a_pdf)
+        a.kunde = kunde.replace(" ", " & ", 1) if " " in kunde else kunde + " &"
+        self.assertEqual(ra.rechnungs_dateiname("RE 2026/77", a.kunde), ziel.name)
+        uid = next(iter(self.zustand.uploads))
+        pfad, _ = self.zustand.uploads[uid]
+        self.zustand.uploads[uid] = (pfad, a)
+        st, f = self.erstellen(uid, "RE 2026/77", ueberschreiben=True)
+        self.assertEqual(st, 409)
+        self.assertIn("gehört zu Rechnung RE 2026/77 für " + kunde, f["fehler"])
+
+    def test_ohne_browser_keine_zweite_instanz(self):  # Codex P2
+        import io
+        from contextlib import redirect_stdout
+        url = app.lade_status()["laufend"]
+        aus = io.StringIO()
+        with redirect_stdout(aus):
+            self.assertEqual(app.main(["--kein-browser"]), 0)  # kehrt sofort zurück statt zweiten Server zu starten
+        self.assertEqual(aus.getvalue().strip(), url)
+        self.assertEqual(app.lade_status()["laufend"], url)
+
     def test_alte_instanz_wird_nach_update_beendet(self):
         """Läuft eine Instanz mit anderem Programmstand, beendet der Start sie (statt alten Code weiterzunutzen)."""
         self.assertEqual(app.laufender_server(), app.lade_status()["laufend"])  # gleicher Stand → wiederverwenden
