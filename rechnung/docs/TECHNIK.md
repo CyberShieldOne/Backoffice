@@ -1,6 +1,6 @@
 # CS Rechnung – Technische Dokumentation
 
-Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
+Stand: Version 1.11 (Branch `claude/invoice-template-script-1snhqe`).
 
 ## 1. Überblick
 
@@ -11,6 +11,7 @@ Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
  bestätigung     ├─▶ (ui/index.html)   (+Token)      (Server)   ├─ lese_beleg()         (+ .pdf via LibreOffice)
  SAP-Ariba-     ─┘                                              ├─ lese_ab()           im Ablageordner
  Rechnung                                                       ├─ quelle_ariba.py
+                                                                ├─ woerterbuch.py ◀── woerterbuch.json
                                                                 └─ fuelle_vorlage() ◀── vorlagen/*.dotx
 ```
 
@@ -25,6 +26,7 @@ Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
 |---|---|
 | `rechnung_aus_ab.py` | Kern und Kommandozeile: Belegart erkennen, CS-AB lesen, Vorlage füllen, DOCX schreiben, PDF-Export |
 | `quelle_ariba.py` | Leser für SAP-Ariba-„Standardrechnungen“ |
+| `woerterbuch.json`, `woerterbuch.py` | Wörterbuch der Feldbezeichnungen (Synonyme) und Zugriff darauf, siehe 4.4 |
 | `app.py` | lokaler HTTP-Server der App (API, Einstellungen, Historie, Nummernlogik) |
 | `ui/index.html` | Oberfläche (HTML/CSS/JS ohne externe Abhängigkeiten) |
 | `vorlagen/2026-OKT_CS-Rechnung_Vorlage.dotx` | Rechnungsvorlage mit Platzhaltern `[…]` |
@@ -41,6 +43,8 @@ Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
 | `/Applications/CS Rechnung.app` | Programm (Startprogramm, Python-Code, Vorlage, Oberfläche) | bis zum nächsten Update |
 | `~/Library/Application Support/CS-Rechnung/venv/` | eigene Python-Umgebung mit `pdfplumber` | wird neu gebaut, wenn sich `requirements-app.txt` ändert |
 | `~/Library/Application Support/CS-Rechnung/einstellungen.json` | Einstellungen, Nummernstand, Historie (s. u.) | dauerhaft |
+| `…/CS-Rechnung/einstellungen.bak.json` | voriger guter Stand (bei jedem Speichern erneuert) | dauerhaft |
+| `…/CS-Rechnung/einstellungen.defekt-<Zeit>.json` | unlesbare Einstellungsdatei, aufgehoben statt überschrieben | bis zum Löschen |
 | `~/Library/Application Support/CS-Rechnung/app.log` | Startprotokoll, Fehlermeldungen | wächst; kann gelöscht werden |
 | `~/Documents/Rechnungen/` (änderbar) | erzeugte Rechnungen `*.docx` / `*.pdf` | dauerhaft (Ablage des Anwenders) |
 | `$TMPDIR/cs-rechnung-XXXX/` | hochgeladene Belege (die letzten 5, für mehrere Tabs) | ältere sofort, unlesbare sofort, alle beim Beenden gelöscht |
@@ -50,10 +54,20 @@ Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
 | Schlüssel | Bedeutung |
 |---|---|
 | `ordner` | zuletzt verwendeter Ablageordner |
+| `ordner_alle` | alle benutzten Ablageordner (bis 20) – die Historie durchsucht sie alle |
 | `letzte_nummer` | höchste eigene Rechnungsnummer (bewegt sich nur vorwärts; SAP-Nummern zählen nicht) |
 | `pdf` | Häkchen „zusätzlich PDF“ |
 | `historie` | bis zu 200 Einträge: Nummer, Kunde, Brutto, Rechnungsdatum, AB-Nr./Quelle, Projekt, Zeitpunkt, DOCX-Pfad |
 | `laufend` | URL der laufenden Instanz inkl. Zugriffstoken (wird beim Beenden entfernt) |
+
+Schreiben ist atomar (Temp-Datei + `os.replace`); ein gleichzeitiger Leser sieht nie eine halbe Datei. Ist die
+Datei trotzdem unlesbar, gilt `einstellungen.bak.json`. Bis Version 1.10 wurde direkt geschrieben: beim Update las
+die neue Instanz u. U. die Datei, während die alte beim Beenden speicherte, bekam einen leeren Stand und speicherte
+ihn – Historie, Nummernstand und Ablageordner waren weg (nachgestellt in `tests/test_historie.py`).
+
+**Historie** = gemerkte Einträge (DOCX existiert noch) + alle `*_Rechnung_*.docx` in: aktuellem Ablageordner,
+dem im Formular eingetragenen Ordner, `ordner_alle`, den Ordnern der gemerkten Einträge und `~/Documents/Rechnungen`.
+Für Dateien ohne Eintrag kommen Nummer und Kunde aus den Dokumenteigenschaften (`dc:identifier`), Brutto bleibt leer.
 
 Unter Linux (Entwicklung/Tests) liegt die Datei unter `$XDG_CONFIG_HOME/cs-rechnung/` bzw. `~/.config/cs-rechnung/`.
 
@@ -71,7 +85,7 @@ Unter Linux (Entwicklung/Tests) liegt die Datei unter `$XDG_CONFIG_HOME/cs-rechn
 
 - `ThreadingHTTPServer` auf `127.0.0.1`, zufälliger Port, zufälliges Token (`secrets.token_urlsafe`).
 - Seite: `GET /<token>/`; alle API-Aufrufe `POST` mit Kopfzeile `X-Token` (sonst 403).
-- **Programmstand:** Prüfsumme über `app.py`, `rechnung_aus_ab.py`, `quelle_ariba.py` und `ui/index.html`
+- **Programmstand:** Prüfsumme über `app.py`, `rechnung_aus_ab.py`, `quelle_ariba.py`, `woerterbuch.py`, `woerterbuch.json` und `ui/index.html`
   (`STAND`, Antwort von `/api/ping-frei`). Läuft bereits eine Instanz gleichen Stands, wird sie wiederverwendet (auch mit `--kein-browser`; nie zwei Instanzen,
   die dieselbe `einstellungen.json` schreiben). Findet ein Start eine laufende Instanz mit anderem Stand – typisch nach einem
   Update ohne vorheriges Beenden –, beendet er sie und startet neu. Die Oberfläche wird beim Serverstart einmal geladen,
@@ -95,11 +109,13 @@ Erkennung am Text der ersten Seite:
 
 | Merkmal | Leser |
 |---|---|
-| „Standardrechnung“ **und** „Lieferantenreferenznr“ | `quelle_ariba.lese_ariba` |
+| „Standardrechnung“ **und** („Lieferantenreferenznr“ **oder** „Ursprünglicher Bestellauftrag“/„RECHNUNGSANSCHRIFT“) | `quelle_ariba.lese_ariba` |
 | „Auftragsbest…“ | `lese_ab` |
 | sonst | Fehler „Unbekannter Beleg“ |
 
 Beide Leser arbeiten mit Wortkoordinaten aus `pdfplumber` (Spalten und Zeilen), nicht mit festen Seitenpositionen.
+Feldbezeichnungen, Spaltenköpfe und Erkennungsmerkmale kommen aus dem Wörterbuch (4.4); die unten genannten
+Bezeichnungen sind jeweils ein Eintrag davon, Synonyme werden gleich behandelt.
 Ergebnis ist ein `Auftrag`-Objekt.
 
 **CS-Auftragsbestätigung (`lese_ab`)**
@@ -110,7 +126,13 @@ Ergebnis ist ein `Auftrag`-Objekt.
 - Produkttabelle über die Spaltenköpfe `Produkte / Einheit / Menge / Summe`; `Leistungsbeschreibung:` bis `Summe Auftrag`.
 - Fußzeile (unterste 8 % jeder Seite) wird ignoriert; mehrseitige ABs werden zusammengesetzt.
 
-**SAP-Ariba-Rechnung (`lese_ariba`)**
+**SAP-Ariba-Rechnung (`lese_ariba`)** – SAP Ariba gibt dieselbe Rechnung in zwei Formen aus, beide werden erkannt:
+
+| Ausgabeform | Merkmal | Vorlage | Besonderheit |
+|---|---|---|---|
+| Kopie („von Menschen lesbare Darstellung“) | „Lieferantenreferenznr.“ | RE-2026-09-30-05 | enthält Bestelldatum |
+| Druckansicht aus dem Portal (US-Letter, Seitenzähler „n/m“) | „Ursprünglicher Bestellauftrag“, „RECHNUNGSANSCHRIFT:“ | RE-2026-09-30-03 | **kein** Bestelldatum (Hinweis, Feld in der App leer) |
+
 - Rechnungsnummer, Rechnungsdatum, Service-Start/-Ende, Bestellauftragsnr./-datum, Nettozahlungsbedingungen (Tage).
 - USt-IdNr. des Kunden (zweite Kennung in der Zeile unter „Umsatzsteuer-/Steuernummer“).
 - Empfänger aus „Rechnungsanschrift“ (Spalte zwischen „Rechnungsanschrift“ und „Zahlungsempfänger“; Region-Zeile wird übersprungen).
@@ -121,7 +143,45 @@ Ergebnis ist ein `Auftrag`-Objekt.
 Steuersatz = 19 % und Netto + Steuer = fälliger Betrag. Beträge werden mit und ohne Tausenderpunkt gelesen
 (`4.500,-`, `4500,00 €`, `EUR 12.345,67`, `4 500,00 €`).
 
-### 4.4 Rechnung erzeugen (`erstelle_rechnung` → `fuelle_vorlage`)
+### 4.4 Wörterbuch der Feldbezeichnungen (`woerterbuch.json`)
+
+Belege variieren in der Beschriftung („Kunden-Nr.“ / „Kundennummer“, „Zahlungsziel“ / „Zahlbar innerhalb von“ …).
+Die Leser suchen kein Feld über festen Wortlaut, sondern über die Liste gleichwertiger Bezeichnungen im Wörterbuch.
+Kein KI-Dienst, keine Netzverbindung – nur Textvergleich.
+
+| Bereich | Inhalt |
+|---|---|
+| `erkennung` | Belegart: alle Begriffe aus `alle` und mindestens einer aus `eins_von` |
+| `ab` | Auftragsbestätigung: Titel, Kopffelder (`kopf`), Bestellung, Liefertermin, Zahlungsziel, Summe, Leistungsbeschreibung, Spaltenköpfe (`tabelle`) |
+| `ariba` | SAP-Ariba: Kopffelder, Beträge, USt-IdNr., Anschriftsblock, Spaltenköpfe, Ende von Positionsdetails und Tabelle |
+
+Regeln (`woerterbuch.py`): Groß-/Kleinschreibung egal, Doppelpunkt nach der Bezeichnung optional, beliebiger
+Leerraum zwischen den Wörtern (auch keiner vor „(“), die längste passende Bezeichnung gewinnt, eine Bezeichnung
+beginnt nie mitten im Wort („Kundenbestellnummer“ ist keine „Bestellnummer“). Der Wert muss in derselben Zeile stehen
+(Ausnahmen: Zahlungsziel, Liefertermin, SAP-Datumsfelder dürfen in der Folgezeile stehen) – sonst träfe ein
+Spaltenkopf wie „Summe (Netto)“ den Wert der Zeile darunter. Zusätzliche Schutzregeln gegen Synonyme im Fließtext:
+
+| Feld | Regel |
+|---|---|
+| Liefertermin | Bezeichnung am Zeilenanfang; der erste Treffer mit lesbarem Datum zählt |
+| Summe netto (AB) | Zeile besteht nur aus Bezeichnung und Betrag; der letzte Treffer zählt (Positionen stehen davor) |
+| `position_details`, `tabelle_ende` (SAP) | die ganze Zeile ist die Bezeichnung („Details siehe Angebot“ beendet nichts) |
+| Spaltenköpfe (`tabelle`) | Einzelwörter |
+
+Fehlt ein Pflichtfeld, nennt die Meldung alle Bezeichnungen, nach denen gesucht wurde. Ist `woerterbuch.json`
+kein gültiges JSON oder eine Liste leer, meldet die App „woerterbuch.json ist fehlerhaft (Zeile …, Spalte …)“.
+Das Wörterbuch wird beim Start der App geladen und gilt bis zum Beenden.
+
+**Neue Bezeichnung ergänzen:** in `woerterbuch.json` an der passenden Liste eine Zeile anfügen, Tests laufen lassen
+(`tests/test_woerterbuch.py` prüft auch die Datei), App neu bauen. Die Prüfsumme (`STAND`) umfasst das Wörterbuch,
+eine laufende alte Instanz wird beim nächsten Start ersetzt. Direkt im installierten Bundle
+(`/Applications/CS Rechnung.app/Contents/Resources/app/woerterbuch.json`) geht es auch, wird aber beim nächsten
+Update überschrieben – dauerhaft daher immer im Repository ergänzen.
+
+Grenze: Das Wörterbuch fängt andere **Wörter** ab, keinen anderen **Aufbau** (andere Spaltenreihenfolge, Werte
+in anderer Zeile, neue Belegart). Dafür bleibt eine Anpassung des Lesers nötig (Abschnitt 8).
+
+### 4.5 Rechnung erzeugen (`erstelle_rechnung` → `fuelle_vorlage`)
 
 Standardwerte, wenn nichts angegeben ist (CLI und App):
 
@@ -177,7 +237,7 @@ Text der Positionstabelle bündig mit dem Fließtext, Innenabstand farbiger Käs
 Tabellenzeilen werden nicht über Seiten geteilt, Standardschrift Calibri (LibreOffice nutzt das maßgleiche Carlito),
 Fußzeile dreispaltig mit Webseite `cyber-shield.org`.
 
-### 4.5 PDF-Export (optional)
+### 4.6 PDF-Export (optional)
 
 `soffice --headless --convert-to pdf` (LibreOffice im `PATH` oder `/Applications/LibreOffice.app`). Ein vorhandenes PDF
 gleichen Namens wird vorher gelöscht; entsteht kein neues, gibt es einen Hinweis – das DOCX ist trotzdem fertig.
@@ -212,17 +272,18 @@ Wird ohne PDF überschrieben, wird das veraltete PDF entfernt.
 
 ```bash
 cd rechnung
-./macos/build_app.sh 1.8        # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
+./macos/build_app.sh 1.11       # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
 ```
 
-Das Bundle enthält `rechnung_aus_ab.py`, `quelle_ariba.py`, `app.py`, `ui/index.html`, die Vorlage und
+Das Bundle enthält `rechnung_aus_ab.py`, `quelle_ariba.py`, `woerterbuch.py`, `woerterbuch.json`, `app.py`, `ui/index.html`, die Vorlage und
 `requirements-app.txt`. Läuft unter macOS und Linux (keine Xcode-Abhängigkeit).
 
 ## 8. Erweitern
 
 **Neue Belegart** (z. B. weiteres Kundenportal):
 1. Modul `quelle_<name>.py` mit `ist_<name>(text)` und `lese_<name>(pfad) -> Auftrag` (Muster: `quelle_ariba.py`).
-2. In `lese_beleg` ein Erkennungsmerkmal ergänzen.
+2. Erkennungsmerkmal unter `erkennung` in `woerterbuch.json` und Abfrage in `lese_beleg` ergänzen; Feldbezeichnungen
+   als eigener Bereich im Wörterbuch.
 3. `Auftrag.quelle` setzen; vorbelegte Werte (`rechnungsnr`, `rechnungsdatum`, `leistung_von/bis`, `ust_id_kunde`) nach Bedarf.
 4. Modul in `macos/build_app.sh` mitkopieren; Generator und Tests nach Vorbild `tests/test_ariba.py`.
 
@@ -235,7 +296,8 @@ die Abschlussprüfung meldet vergessene Platzhalter.
 cd rechnung
 pip install -r requirements.txt
 python tests/test_rechnung.py --iterationen 10 --je 6 [--echt AB.pdf] [--pdf]   # synthetische ABs, 10 Iterationen
-python -m unittest tests/test_regression.py tests/test_ariba.py tests/test_review2.py  # Regressionen, SAP, 2. Review
+python -m unittest tests/test_regression.py tests/test_ariba.py tests/test_review2.py tests/test_woerterbuch.py tests/test_historie.py
+# Regressionen, SAP, 2. Review, Wörterbuch (Belege mit Synonym-Beschriftungen, Ergänzung ohne Codeänderung)
 python app.py --kein-browser   # in zweitem Terminal, dann:
 node tests/ui_test.js <URL> <AB-A.pdf> <AB-B.pdf> <Ordner> [SAP.pdf]          # Oberfläche (Playwright)
 ```
@@ -245,7 +307,8 @@ Kundenbelege liegen wegen Kundendaten nicht im Repository.
 
 ## 10. Bekannte Grenzen
 
-- Unterstützt sind genau die zwei Layouts oben; abweichende Belege werden mit Meldung abgelehnt, nicht geraten.
+- Unterstützt sind die zwei Layouts oben; abweichende Beschriftungen fängt das Wörterbuch ab (4.4), ein abweichender
+  Aufbau wird mit Meldung abgelehnt, nicht geraten.
 - Umsatzsteuer fest 19 %; Reverse-Charge, andere Sätze und Fremdwährungen sind nicht vorgesehen.
 - Überschriften der Vorlage nutzen die Schrift Montserrat; ist sie auf dem Mac nicht installiert, ersetzt Word sie.
 - Ohne Apple-Signatur (Developer ID, 99 USD/Jahr, für eine GmbH mit D-U-N-S-Nummer) erscheint auf fremden Macs

@@ -10,6 +10,7 @@ Aufruf: python app.py [--kein-browser] [--port N]
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -41,23 +42,75 @@ STANDARD_ORDNER = Path.home() / "Documents" / "Rechnungen"
 # Programmstand: Prüfsumme über Code und Oberfläche. Eine laufende Instanz mit anderem Stand
 # (z. B. nach einem Update) wird beim Start beendet, damit nie alter Code mit neuer Oberfläche läuft.
 STAND = hashlib.sha256(b"".join(
-    (HIER / f).read_bytes() for f in ("app.py", "rechnung_aus_ab.py", "quelle_ariba.py", "ui/index.html")
+    (HIER / f).read_bytes() for f in ("app.py", "rechnung_aus_ab.py", "quelle_ariba.py", "woerterbuch.py",
+                                       "woerterbuch.json", "ui/index.html")
     if (HIER / f).exists())).hexdigest()[:16]
 UI_HTML = (HIER / "ui" / "index.html").read_text(encoding="utf-8")  # einmal laden: Oberfläche passt zum Code
 LEERLAUF_S = 300       # ohne Lebenszeichen der Seite → beenden (Browser drosseln Hintergrund-Tabs auf 1/min)
 ERSTKONTAKT_S = 180    # Zeit bis zum ersten Seitenaufruf
 
 
-def lade_status() -> dict:
+def _sicherung() -> Path:
+    return STATUS_DATEI.with_name(STATUS_DATEI.stem + ".bak.json")
+
+
+_STATUS_LOCK = threading.Lock()
+
+
+def _lies_json(pfad: Path) -> dict | None:
     try:
-        return json.loads(STATUS_DATEI.read_text(encoding="utf-8"))
+        d = json.loads(pfad.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
     except (OSError, ValueError):
-        return {}
+        return None
+
+
+def lade_status() -> dict:
+    """Einstellungen und Historie. Ist die Datei unlesbar, gilt die Sicherung des letzten guten Stands –
+    nie stillschweigend ein leerer Stand, der beim nächsten Speichern die Historie überschreibt."""
+    with _STATUS_LOCK:
+        if not STATUS_DATEI.exists() and not _sicherung().exists():
+            return {}
+        for _ in range(10):   # ein anderer Prozess schreibt gerade (alte Version: nicht atomar) → kurz warten
+            d = _lies_json(STATUS_DATEI)
+            if d is not None:
+                return d
+            time.sleep(0.05)
+        if STATUS_DATEI.exists():   # defekte Datei aufheben, nicht überschreiben
+            try:
+                os.replace(STATUS_DATEI, STATUS_DATEI.with_name(
+                    f"{STATUS_DATEI.stem}.defekt-{dt.datetime.now():%Y%m%d-%H%M%S-%f}.json"))
+            except OSError:
+                pass
+        # Sicherung, sonst die jüngste aufgehobene Datei, die inzwischen lesbar ist (der Schreiber
+        # hat in die umbenannte Datei weitergeschrieben)
+        kandidaten = [_sicherung()] + sorted(STATUS_DATEI.parent.glob(f"{STATUS_DATEI.stem}.defekt-*.json"),
+                                             reverse=True)
+        return next((d for k in kandidaten if (d := _lies_json(k)) is not None), {})
 
 
 def speichere_status(daten: dict) -> None:
-    STATUS_DIR.mkdir(parents=True, exist_ok=True)
-    STATUS_DATEI.write_text(json.dumps(daten, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomar schreiben (Temp-Datei + os.replace): ein gleichzeitiger Leser – z. B. die neue Instanz,
+    während die alte nach einem Update beim Beenden speichert – sieht nie eine halb geschriebene Datei.
+    Der vorige gute Stand bleibt als einstellungen.bak.json erhalten."""
+    with _STATUS_LOCK:
+        STATUS_DATEI.parent.mkdir(parents=True, exist_ok=True)
+        if _lies_json(STATUS_DATEI) is not None:
+            try:
+                shutil.copy2(STATUS_DATEI, _sicherung())
+            except OSError:
+                pass
+        fd, tmp = tempfile.mkstemp(prefix=".einstellungen-", suffix=".json", dir=STATUS_DATEI.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(daten, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, STATUS_DATEI)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
 
 
 NR_RX = re.compile(r"^(.*?)(\d+)$")
@@ -93,9 +146,24 @@ def merke_in_historie(st: dict, eintrag: dict) -> None:
     st["historie"] = [eintrag] + alt[:HISTORIE_MAX - 1]
 
 
-def historie(st: dict, ordner: Path, anzahl: int = 50) -> list[dict]:
-    """Letzte Rechnungen: gemerkte Einträge, deren DOCX noch existiert, plus Rechnungen im
-    Ablageordner ohne Eintrag (z. B. per Kommandozeile erstellt) – neueste zuerst."""
+ORDNER_MERKEN = 20
+
+
+def merke_ordner(st: dict, ordner: Path) -> None:
+    """Alle je benutzten Ablageordner merken – die Historie durchsucht sie alle."""
+    st["ordner_alle"] = [str(ordner)] + [o for o in st.get("ordner_alle", []) if o != str(ordner)][:ORDNER_MERKEN - 1]
+
+
+def such_ordner(st: dict, ordner: Path, zusatz: list[Path] = ()) -> list[Path]:
+    alle = [ordner, *zusatz, *(Path(o) for o in st.get("ordner_alle", [])), STANDARD_ORDNER]
+    alle += [Path(e["docx"]).parent for e in st.get("historie", []) if e.get("docx")]
+    return list(dict.fromkeys(alle))
+
+
+def historie(st: dict, ordner: Path, anzahl: int = 50, zusatz: list[Path] = ()) -> list[dict]:
+    """Letzte Rechnungen: gemerkte Einträge, deren DOCX noch existiert, plus Rechnungen ohne Eintrag in
+    allen bekannten Ablageordnern (per Kommandozeile erstellt oder Einstellungen verloren) – neueste zuerst.
+    Nummer und Kunde solcher Dateien kommen aus den Dokumenteigenschaften (exakt), sonst aus dem Dateinamen."""
     eintraege, bekannt = [], set()
     for e in st.get("historie", []):
         docx = Path(e.get("docx", ""))
@@ -103,17 +171,24 @@ def historie(st: dict, ordner: Path, anzahl: int = 50) -> list[dict]:
             pdf = docx.with_suffix(".pdf")
             eintraege.append(dict(e, pdf=str(pdf) if pdf.is_file() else None))
             bekannt.add(str(docx))
-    try:
-        dateien = list(ordner.glob("*_Rechnung_*.docx"))
-    except OSError:
-        dateien = []
+    dateien = []
+    for o in such_ordner(st, ordner, zusatz):
+        try:
+            dateien += list(o.glob("*_Rechnung_*.docx")) if o.is_dir() else []
+        except OSError:
+            pass
     for f in dateien:
         if str(f) in bekannt or f.name.startswith("~$"):
             continue
+        bekannt.add(str(f))
         nr, kunde = f.stem.split("_Rechnung_", 1)
+        kunde = kunde.replace("_", " ")
+        ident = ra.rechnungs_identitaet(f)
+        if ident:
+            nr, kunde = ident
         zeit = dt.datetime.fromtimestamp(f.stat().st_mtime)
         pdf = f.with_suffix(".pdf")
-        eintraege.append({"nummer": nr, "kunde": kunde.replace("_", " "), "brutto": None,
+        eintraege.append({"nummer": nr, "kunde": kunde, "brutto": None,
                           "rechnungsdatum": None, "erstellt": zeit.isoformat(timespec="seconds"),
                           "docx": str(f), "pdf": str(pdf) if pdf.is_file() else None})
     eintraege.sort(key=lambda e: e.get("erstellt") or "", reverse=True)
@@ -211,6 +286,7 @@ class Zustand:
         self.erstellt: set[str] = set()  # nur diese Dateien darf /api/oeffnen öffnen
         self.stand = STAND                # Programmstand dieser Instanz (bei Serverstart festgelegt)
         self.lock = threading.Lock()
+        self.such_ordner: set[str] = set()  # im Formular eingetragene Ablageordner (Historie durchsucht sie)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -273,7 +349,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._erstellen()
             if self.path == "/api/historie":
                 st = lade_status()
-                return self._antwort(200, {"eintraege": historie(st, Path(st.get("ordner") or STANDARD_ORDNER))})
+                text = (self._json().get("ordner") or "").strip()
+                feld = Path(os.path.expanduser(text)) if text else None
+                if feld is not None and feld.is_absolute() and feld.is_dir():
+                    z.such_ordner.add(str(feld))   # Dateien darin darf /api/oeffnen dann öffnen
+                zusatz = [Path(o) for o in sorted(z.such_ordner)]
+                return self._antwort(200, {"eintraege": historie(st, Path(st.get("ordner") or STANDARD_ORDNER),
+                                                                  zusatz=zusatz)})
             if self.path == "/api/oeffnen":
                 d = self._json()
                 pfad = Path(d["pfad"])
@@ -287,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._antwort(200, {"ok": True})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return None
-        except ra.AbFehler as e:
+        except (ra.AbFehler, ra.wb.WoerterbuchFehler) as e:
             return self._fehler(422, str(e))
         except Exception as e:  # noqa: BLE001
             return self._fehler(500, f"{type(e).__name__}: {e}")
@@ -295,7 +377,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _historie_dateien(self) -> set[str]:
         st = lade_status()
-        return {p for e in historie(st, Path(st.get("ordner") or STANDARD_ORDNER), HISTORIE_MAX)
+        zusatz = [Path(o) for o in sorted(self.zustand.such_ordner)]
+        return {p for e in historie(st, Path(st.get("ordner") or STANDARD_ORDNER), HISTORIE_MAX, zusatz)
                 for p in (e["docx"], e["pdf"]) if p}
 
     def _start(self):
@@ -385,6 +468,7 @@ class Handler(BaseHTTPRequestHandler):
         st.update({"ordner": str(ordner), "pdf": bool(d.get("pdf"))})
         if nr != a.rechnungsnr:  # fremd vergebene Nummern (SAP) bestimmen nicht das eigene Nummernschema
             st["letzte_nummer"] = hoehere_nummer(st.get("letzte_nummer"), nr)
+        merke_ordner(st, ordner)
         merke_in_historie(st, {
             "nummer": nr, "kunde": a.kunde, "brutto": ra.fmt_betrag(r.brutto),
             "rechnungsdatum": r.datum.isoformat(), "ab_nr": a.ab_nr or a.quelle, "projekt": a.projekt,
@@ -445,6 +529,10 @@ def laufender_server() -> str | None:
             time.sleep(0.25)
         except OSError:
             break
+    for _ in range(20):  # warten, bis die alte Instanz beim Beenden ihren Eintrag entfernt hat – sonst
+        if lade_status().get("laufend") != url:   # überschriebe sie danach den Stand der neuen Instanz
+            break
+        time.sleep(0.1)
     print(f"Ältere Instanz ({antwort.get('stand', 'alt')}) beendet, starte Stand {STAND}", flush=True)
     return None
 
@@ -462,6 +550,10 @@ def main(argv=None) -> int:
         print(url, flush=True)
         return 0
 
+    try:   # Wörterbuch beim Start laden: passt zu STAND und Code dieser Instanz (wie UI_HTML)
+        ra.wb.laden()
+    except ra.wb.WoerterbuchFehler as e:   # Instanz trotzdem starten – die Meldung erscheint beim Lesen
+        print(e, file=sys.stderr, flush=True)
     z = Zustand(secrets.token_urlsafe(16))
     Handler.zustand = z
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

@@ -3,8 +3,10 @@
 Dokumentation: [Anleitung](docs/ANLEITUNG.md) · [Technische Dokumentation](docs/TECHNIK.md)
 
 Füllt `vorlagen/2026-OKT_CS-Rechnung_Vorlage.dotx` mit den Daten einer CS-Auftragsbestätigung (PDF)
-oder einer SAP-Ariba-„Standardrechnung“ (z. B. Infineon Supplier Portal, `quelle_ariba.py`).
-Die Belegart wird automatisch erkannt.
+oder einer SAP-Ariba-„Standardrechnung“ (z. B. Infineon Supplier Portal, `quelle_ariba.py`;
+beide Ausgabeformen: „Kopie“ und Druckansicht aus dem Portal).
+Die Belegart wird automatisch erkannt. Feldbezeichnungen und ihre Synonyme stehen in `woerterbuch.json`
+(neue Formulierung im Beleg → dort eine Zeile ergänzen, keine Codeänderung).
 
 Bei SAP-Rechnungen kommen Rechnungsnummer, Rechnungsdatum, Leistungszeitraum, Bestellnummer, Zahlungsziel
 und USt-IdNr. des Kunden aus dem Beleg. Die Nummer bleibt die der eingereichten SAP-Rechnung (sonst Doppelzahlungsrisiko),

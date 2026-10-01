@@ -45,7 +45,8 @@ Erscheint trotzdem „Apple konnte nicht überprüfen …“: einmal `xattr -cr 
 
 ## 2. Rechnung erstellen
 
-1. **Beleg hineinziehen** (oder Feld anklicken und auswählen): Auftragsbestätigung **oder** SAP-Ariba-Rechnung als PDF.
+1. **Beleg hineinziehen** (oder Feld anklicken und auswählen): Auftragsbestätigung **oder** SAP-Ariba-Rechnung als PDF
+   (beide Ariba-Ausgaben: „Kopie“ und Druckansicht aus dem Portal; die Druckansicht enthält kein Bestelldatum).
    Die App erkennt die Belegart selbst und zeigt sie an, z. B. „✓ RE-2026-09-30-05.pdf (SAP Ariba)“.
 2. **Prüfen** unter „Aus dem Beleg gelesen“: Kunde, Anschrift, Beleg- und Bestellnummer, Positionen, Netto/USt/Brutto.
 3. **Rechnungsdaten ergänzen** (alle Felder änderbar):
@@ -62,7 +63,9 @@ Erscheint trotzdem „Apple konnte nicht überprüfen …“: einmal `xattr -cr 
    | Angebotsnummer | leer – leer bedeutet: Verweis entfällt | leer |
    | Ablageordner | `~/Documents/Rechnungen` (letzter Ordner wird gemerkt) | ebenso |
 
-4. **„Rechnung erstellen“** klicken. Danach: *In Word öffnen*, *PDF öffnen* (falls erstellt), *Im Finder zeigen*.
+4. **„Rechnung erstellen“** klicken. Danach: *In Word öffnen*, *PDF öffnen* (falls erstellt), *Im Finder zeigen*,
+   **Weitere Rechnung erstellen** (zurück zu Schritt 1: Beleg und Kundendaten geleert, nächste freie Nummer und
+   heutiges Datum gesetzt, Ablageordner und PDF-Haken bleiben).
    Hinweise unter dem Ergebnis erklären, was fehlte oder weggelassen wurde.
 
 Dateiname: `<Rechnungsnummer>_Rechnung_<Kunde>.docx`, z. B. `2026-0142_Rechnung_OHB_SE.docx`.
@@ -87,9 +90,13 @@ Dateiname: `<Rechnungsnummer>_Rechnung_<Kunde>.docx`, z. B. `2026-0142_Rechnung_
 
 ## 3. Letzte Rechnungen
 
-Unten in der App: die zuletzt erstellten Rechnungen und alle Rechnungen im Ablageordner, neueste zuerst.
-Suche nach Nummer, Kunde, Projekt oder Betrag. Je Zeile: *Word*, *PDF*, *Finder*.
+Unten in der App: die zuletzt erstellten Rechnungen und alle Rechnungen in den bisher benutzten Ablageordnern,
+neueste zuerst. Suche nach Nummer, Kunde, Projekt oder Betrag. Je Zeile: *Word*, *PDF*, *Finder*.
 Im Finder gelöschte Rechnungen verschwinden aus der Liste.
+
+**Rechnungen fehlen in der Liste?** Im Feld *Ablageordner* den Ordner eintragen, in dem sie liegen, und das Feld
+verlassen (Tab) – die Rechnungen dort erscheinen sofort. Nach der nächsten erstellten Rechnung merkt sich die App
+den Ordner dauerhaft. Rechnungen, die so zurückkommen, zeigen keinen Bruttobetrag (der steht nur im Dokument).
 
 ---
 
@@ -121,7 +128,9 @@ Bei SAP-Rechnungen ist `--rechnungsnr` nicht nötig. Eine Datei, die zu einer an
 | „Python 3 fehlt …“ | im Terminal `xcode-select --install` oder Python von python.org installieren |
 | „Einrichtung fehlgeschlagen (Internetverbindung?)“ | erster Start ohne Internet → mit Internet erneut starten |
 | „Unbekannter Beleg …“ | PDF ist weder CS-AB noch SAP-Ariba-Standardrechnung |
-| „… nicht gefunden“ / „Summe der Positionen ≠ …“ | Beleg weicht vom bekannten Layout ab → Beleg an die Entwicklung geben |
+| „… nicht gefunden (Bezeichnungen laut woerterbuch.json: …)“ | Beleg nennt das Feld anders → Bezeichnung in `woerterbuch.json` ergänzen (Technik, Abschnitt 4.4) |
+| „woerterbuch.json ist fehlerhaft (Zeile …)“ | Tippfehler beim Ergänzen, meist Komma nach dem letzten Eintrag → an der genannten Stelle korrigieren, App beenden und neu starten |
+| „Summe der Positionen ≠ …“ / sonst abweichender Aufbau | Beleg weicht vom bekannten Layout ab → Beleg an die Entwicklung geben |
 | „Keine Verbindung zu CS Rechnung“ | App wurde beendet → Dock-Symbol erneut anklicken |
 | PDF-Knopf fehlt / „PDF-Export fehlgeschlagen“ | LibreOffice fehlt oder ist gerade geöffnet → beenden, erneut erstellen; das DOCX ist trotzdem fertig |
 | Sonstiges | Protokoll: `~/Library/Application Support/CS-Rechnung/app.log` |

@@ -89,6 +89,10 @@ def _parse_datum(text: str) -> dt.date:
     raise AbFehler(f"Datum nicht lesbar: {text!r}")
 
 
+# Rest einer Summenzeile nach der Bezeichnung: nur ein Betrag (für parse_betrag), sonst nichts
+SUMMENZEILE = (r"((?:EUR|€)?[ \t]*\d[\d. \t\u00a0\u202f\u2009]*(?:,(?:\d{1,2}|-{1,2}|–))?[ \t]*(?:€|EUR)?)[ \t]*$")
+
+
 def parse_betrag(text: str) -> Decimal:
     """'EUR 4.500,-' / '4500,00 €' / 'EUR 12.345,67' / '4 500,00 €' -> Decimal."""
     # Leerzeichen als Tausendertrenner (DIN 5008, auch U+00A0/U+202F/U+2009) entfernen
@@ -180,8 +184,7 @@ class Auftrag:
     ust_id_kunde: str = ""
 
 
-KOPF_LABELS = ["Datum", "Kunde", "Anschrift", "Kunden-Nr.", "Kundenkontakt",
-               "Kundenmail", "Rechnungsempf", "Projekt"]
+import woerterbuch as wb  # noqa: E402  (Feldbezeichnungen aus woerterbuch.json)
 
 
 def _zeilen(words, tol=2.0):
@@ -200,16 +203,19 @@ def _text(ws) -> str:
 
 
 def _kopf_felder(words, x_rechts: float, y_bis: float) -> dict[str, str]:
-    """Rechter Kopfblock 'Label: Wert', Folgezeilen ohne Label gehören zum Vorfeld."""
+    """Rechter Kopfblock 'Bezeichnung: Wert' (Bezeichnungen aus dem Wörterbuch, Schlüssel = Feldname
+    wie 'kunde', 'kunden_nr'); Folgezeilen ohne Bezeichnung gehören zum vorigen Feld."""
     felder: dict[str, str] = {}
     aktuell = None
-    rx = re.compile(r"^(%s)\s*:\s*(.*)$" % "|".join(re.escape(l) for l in KOPF_LABELS))
+    regeln = [(feld, re.compile(r"^" + wb.rx("ab", "kopf", feld) + r"(?![A-Za-zÄÖÜäöüß])\s*:?\s*(.*)$"))
+              for feld in wb.laden()["ab"]["kopf"]]
     for z in _zeilen([w for w in words if w["x0"] >= x_rechts and w["top"] < y_bis]):
         t = _text(z)
-        m = rx.match(t)
-        if m:
-            aktuell = m.group(1)
-            felder[aktuell] = m.group(2).strip()
+        # längste passende Bezeichnung gewinnt ("Kunden-Nr." vor "Kunde")
+        treffer = [(m.start(1), feld, m) for feld, rx in regeln if (m := rx.match(t))]
+        if treffer:
+            _, aktuell, m = max(treffer, key=lambda x: x[0])
+            felder[aktuell] = m.group(1).strip()
         elif aktuell:
             felder[aktuell] = (felder[aktuell] + " " + t).strip()
     return felder
@@ -243,22 +249,24 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
     zeilen_txt = [_text(z) for z in zeilen]
 
     # --- AB-Nummer (Titelzeile) -----------------------------------------
-    ab_zeile = next((i for i, t in enumerate(zeilen_txt)
-                     if re.match(r"^Auftragsbest[äa]tigung\s+\S", t)), None)
+    titel_rx = re.compile(r"^" + wb.rx("ab", "titel") + r"\s*:?\s+(\S.*)$")
+    ab_zeile = next((i for i, t in enumerate(zeilen_txt) if titel_rx.match(t)), None)
     if ab_zeile is None:
         raise AbFehler("Zeile 'Auftragsbestätigung <Nr>' nicht gefunden")
-    ab_nr = zeilen_txt[ab_zeile].split(None, 1)[1].strip()
+    ab_nr = titel_rx.match(zeilen_txt[ab_zeile]).group(1).strip()
     y_titel = zeilen[ab_zeile][0]["top"]
 
     # --- Kopfblock rechts -----------------------------------------------
-    datum_w = next((w for w in words if w["text"].startswith("Datum") and w["top"] < y_titel), None)
+    datum_rx = re.compile(r"^" + wb.rx("ab", "kopf", "datum") + r"\s*:")
+    datum_w = next((w for z in zeilen if z[0]["top"] < y_titel
+                    for i, w in enumerate(z) if datum_rx.match(_text(z[i:i + 3]))), None)
     x_rechts = (datum_w["x0"] - 5) if datum_w else breite * 0.5
     kopf = _kopf_felder(words, x_rechts, y_titel)
-    for pflicht in ("Datum", "Kunde", "Anschrift", "Kunden-Nr.", "Kundenkontakt", "Projekt"):
+    for pflicht in ("datum", "kunde", "anschrift", "kunden_nr", "kontakt", "projekt"):
         if not kopf.get(pflicht):
-            raise AbFehler(f"Kopffeld '{pflicht}' nicht gefunden")
+            raise AbFehler("Kopffeld " + wb.nicht_gefunden("ab", "kopf", pflicht))
 
-    anschrift = kopf["Anschrift"]
+    anschrift = kopf["anschrift"]
     m = re.match(r"^(.*?)[,;]?\s+((?:D-)?\d{5}\s+.+)$", anschrift)
     if not m:
         raise AbFehler(f"Anschrift nicht in Straße / PLZ Ort zerlegbar: {anschrift!r}")
@@ -268,20 +276,27 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
     lese_hinweise: list[Hinweis] = []
     bestell_nr, bestell_datum = lies_bestellung(text, lese_hinweise)
     liefertermin = None
-    m = re.search(r"Liefertermin:?\s*([^\n]+)", text)
-    if m:
+    # Bezeichnung am Zeilenanfang (sonst träfe z. B. "Projekt: Fertigstellung …" das Synonym "Fertigstellung");
+    # der erste Treffer mit lesbarem Datum gewinnt
+    kandidaten = [m.group(1).strip() for m in
+                  wb.alle(text, ("ab", "liefertermin"), r"([^\n]*\S[^\n]*)", zeilenanfang=True, naechste_zeile=True)]
+    for k in kandidaten:
         try:
-            liefertermin = parse_datum(m.group(1))
+            liefertermin = parse_datum(k)
+            break
         except AbFehler:
-            lese_hinweise.append(Hinweis(f"Liefertermin '{m.group(1).strip()}' ist kein Datum – "
-                                         "Leistungsende bitte selbst angeben", "--bis"))
-    m = re.search(r"Zahlungsziel:?\s*(\d+)\s*Tage", text)
+            pass
+    if kandidaten and liefertermin is None:
+        lese_hinweise.append(Hinweis(f"Liefertermin '{kandidaten[0]}' ist kein Datum – "
+                                     "Leistungsende bitte selbst angeben", "--bis"))
+    m = wb.suche(text, ("ab", "zahlungsziel"), r"[^\n\d]{0,30}?(\d+)\s*Tag", naechste_zeile=True)
     if not m:
-        raise AbFehler("Zahlungsziel ('Zahlungsziel: N Tage') nicht gefunden")
+        raise AbFehler("Zahlungsziel (N Tage): " + wb.nicht_gefunden("ab", "zahlungsziel"))
     zahlungsziel = int(m.group(1))
-    m = re.search(r"Summe Auftrag\s*\(Netto\)\s*:?\s*([^\n]+)", text)
+    # nur eine Zeile, die aus Bezeichnung und Betrag besteht; die letzte zählt (Beschreibungen stehen davor)
+    m = next(reversed(list(wb.alle(text, ("ab", "summe_netto"), SUMMENZEILE, zeilenanfang=True))), None)
     if not m:
-        raise AbFehler("'Summe Auftrag (Netto)' nicht gefunden")
+        raise AbFehler("Summe: " + wb.nicht_gefunden("ab", "summe_netto"))
     summe = parse_betrag(m.group(1))
 
     positionen = _lese_positionen(words, zeilen, zeilen_txt)
@@ -293,19 +308,19 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
 
     return Auftrag(
         ab_nr=ab_nr,
-        ab_datum=parse_datum(kopf["Datum"]),
-        kunde=kopf["Kunde"],
+        ab_datum=parse_datum(kopf["datum"]),
+        kunde=kopf["kunde"],
         strasse=strasse,
         plz_ort=plz_ort,
-        kunden_nr=kopf["Kunden-Nr."],
-        kontakt=kopf["Kundenkontakt"],
-        projekt=kopf["Projekt"],
+        kunden_nr=kopf["kunden_nr"],
+        kontakt=kopf["kontakt"],
+        projekt=kopf["projekt"],
         summe_netto=summe,
         zahlungsziel_tage=zahlungsziel,
         bestell_nr=bestell_nr,
         bestell_datum=bestell_datum,
         liefertermin=liefertermin,
-        rechnungs_mail=kopf.get("Rechnungsempf", ""),
+        rechnungs_mail=kopf.get("rechnungsempf", ""),
         positionen=positionen,
         hinweise=lese_hinweise,
     )
@@ -314,7 +329,7 @@ def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
 def lies_bestellung(text: str, hinweise: list[Hinweis]) -> tuple[str, dt.date | None]:
     """Zeile 'Ihre Bestellung [Nr.] <Nummer> … [vom <Datum>]' → (Nummer, Datum).
     Nummer = erstes Wort mit einer Ziffer vor 'vom' (nicht 'per', 'Nr.', 'Email' …); Datum optional."""
-    m = re.search(r"Ihre Bestellung\b([^\n]*)", text)
+    m = wb.suche(text, ("ab", "bestellung"), r"([^\n]*)")
     if not m:
         return "", None
     teile = re.split(r"\bvom\b", m.group(1), maxsplit=1)
@@ -338,24 +353,34 @@ def lese_beleg(pdf_pfad: Path) -> Auftrag:
         erste = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
         if quelle_ariba.ist_ariba(erste):
             return quelle_ariba.lese_ariba(pdf_pfad, pdf)
-        if "Auftragsbest" not in erste:
+        if not wb.erkannt(erste, "auftragsbestaetigung"):
             raise AbFehler("Unbekannter Beleg – erwartet wird eine CS-Auftragsbestätigung "
                            "oder eine SAP-Ariba-Rechnung (Standardrechnung)")
         return lese_ab(pdf_pfad, pdf)
 
 
 def _lese_positionen(words, zeilen, zeilen_txt) -> list[Position]:
-    kopf_i = next((i for i, z in enumerate(zeilen)
-                   if {"Produkte", "Einheit", "Menge", "Summe"} <= {w["text"] for w in z}), None)
+    spalten_namen = ("produkt", "einheit", "menge", "summe")
+
+    def kopfspalten(z):
+        """Wort je Spalte im Tabellenkopf (Bezeichnungen aus dem Wörterbuch) oder None."""
+        k = {}
+        for name in spalten_namen:
+            w = next((w for w in z if wb.wort_passt(w["text"], "ab", "tabelle", name)), None)
+            if w is None:
+                return None
+            k[name] = w
+        return k if k["produkt"]["x0"] < k["einheit"]["x0"] < k["menge"]["x0"] < k["summe"]["x0"] else None
+
+    kopf_i, k = next(((i, kk) for i, z in enumerate(zeilen) if (kk := kopfspalten(z))), (None, None))
     if kopf_i is None:
         raise AbFehler("Tabellenkopf 'Produkte / Einheit / Menge / Summe' nicht gefunden")
-    k = {w["text"]: w for w in zeilen[kopf_i]}
-    b_einheit = k["Einheit"]["x0"] - 25
-    b_menge = (k["Einheit"]["x1"] + k["Menge"]["x0"]) / 2
-    b_summe = (k["Menge"]["x1"] + k["Summe"]["x0"]) / 2
+    b_einheit = k["einheit"]["x0"] - 25
+    b_menge = (k["einheit"]["x1"] + k["menge"]["x0"]) / 2
+    b_summe = (k["menge"]["x1"] + k["summe"]["x0"]) / 2
 
-    ende_i = next((i for i in range(kopf_i + 1, len(zeilen_txt))
-                   if zeilen_txt[i].startswith("Summe Auftrag")), len(zeilen_txt))
+    summe_rx = re.compile(r"^\s*" + wb.rx("ab", "summe_netto") + r"(?![A-Za-zÄÖÜäöüß])[ \t]*:?[ \t]*" + SUMMENZEILE)
+    ende_i = next((i for i in range(kopf_i + 1, len(zeilen_txt)) if summe_rx.match(zeilen_txt[i])), len(zeilen_txt))
 
     positionen: list[Position] = []
     roh: dict | None = None
@@ -399,9 +424,9 @@ def _lese_positionen(words, zeilen, zeilen_txt) -> list[Position]:
             in_beschreibung = False
         if roh is None:
             continue
-        if re.match(r"^Leistungsbeschreibung\s*:?", t):
+        if wb.beginnt_mit(t, "ab", "leistungsbeschreibung"):
             in_beschreibung = True
-            rest = re.sub(r"^Leistungsbeschreibung\s*:?\s*", "", t)
+            rest = re.sub(r"^\s*" + wb.rx("ab", "leistungsbeschreibung") + r"\s*:?\s*", "", t)
             roh["beschr"].append([rest] if rest else [])
             letzte_top = z[0]["top"]
             continue
@@ -928,7 +953,7 @@ def main(argv=None) -> int:
     except DateiExistiert as e:
         print(f"FEHLER: {e}" + ("" if e.fremd else " Ersetzen mit --ueberschreiben."), file=sys.stderr)
         return 3
-    except AbFehler as e:
+    except (AbFehler, wb.WoerterbuchFehler) as e:
         print(f"FEHLER (Beleg): {e}", file=sys.stderr)
         return 2
     a = r.auftrag
