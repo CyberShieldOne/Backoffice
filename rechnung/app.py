@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,12 @@ else:
     STATUS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "cs-rechnung"
 STATUS_DATEI = STATUS_DIR / "einstellungen.json"
 STANDARD_ORDNER = Path.home() / "Documents" / "Rechnungen"
+# Programmstand: Prüfsumme über Code und Oberfläche. Eine laufende Instanz mit anderem Stand
+# (z. B. nach einem Update) wird beim Start beendet, damit nie alter Code mit neuer Oberfläche läuft.
+STAND = hashlib.sha256(b"".join(
+    (HIER / f).read_bytes() for f in ("app.py", "rechnung_aus_ab.py", "quelle_ariba.py", "ui/index.html")
+    if (HIER / f).exists())).hexdigest()[:16]
+UI_HTML = (HIER / "ui" / "index.html").read_text(encoding="utf-8")  # einmal laden: Oberfläche passt zum Code
 LEERLAUF_S = 300       # ohne Lebenszeichen der Seite → beenden (Browser drosseln Hintergrund-Tabs auf 1/min)
 ERSTKONTAKT_S = 180    # Zeit bis zum ersten Seitenaufruf
 
@@ -186,6 +193,7 @@ class Zustand:
         self.uploads: dict[str, tuple[Path, ra.Auftrag]] = {}
         self.tmp = Path(tempfile.mkdtemp(prefix="cs-rechnung-"))
         self.erstellt: set[str] = set()  # nur diese Dateien darf /api/oeffnen öffnen
+        self.stand = STAND                # Programmstand dieser Instanz (bei Serverstart festgelegt)
         self.lock = threading.Lock()
 
 
@@ -225,12 +233,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         z = self.zustand
         if self.path == f"/{z.token}/" or self.path == f"/{z.token}":
-            html = (HIER / "ui" / "index.html").read_text(encoding="utf-8")
+            html = UI_HTML
             html = html.replace("__TOKEN__", z.token)
             z.letzter_kontakt = time.monotonic()
             return self._antwort(200, html.encode("utf-8"), "text/html; charset=utf-8")
         if self.path == "/api/ping-frei":  # für zweiten App-Start
-            return self._antwort(200, {"ok": True})
+            return self._antwort(200, {"ok": True, "stand": self.zustand.stand})
         return self._fehler(404, "nicht gefunden")
 
     def do_POST(self):
@@ -390,17 +398,37 @@ def waechter(server: ThreadingHTTPServer, z: Zustand):
 
 
 def laufender_server() -> str | None:
-    """URL einer bereits laufenden Instanz (dann nur Fenster öffnen)."""
+    """URL einer bereits laufenden Instanz gleichen Stands (dann nur Fenster öffnen).
+    Läuft eine Instanz mit anderem Stand (altes Programm nach Update), wird sie beendet."""
     st = lade_status()
     url = st.get("laufend")
     if not url:
         return None
-    try:
-        basis = url.split("/", 3)
-        with urllib.request.urlopen(f"{basis[0]}//{basis[2]}/api/ping-frei", timeout=1) as r:
-            return url if r.status == 200 else None
-    except OSError:
+    teile = url.split("/")
+    if len(teile) < 4:
         return None
+    basis, token = f"{teile[0]}//{teile[2]}", teile[3]
+    try:
+        with urllib.request.urlopen(f"{basis}/api/ping-frei", timeout=1) as r:
+            antwort = json.loads(r.read() or b"{}")
+    except (OSError, ValueError):
+        return None
+    if antwort.get("stand") == STAND:
+        return url
+    try:  # anderer Stand: alte Instanz beenden (Token steht in den eigenen Einstellungen)
+        req = urllib.request.Request(f"{basis}/api/beenden", data=b"{}", method="POST",
+                                     headers={"X-Token": token})
+        urllib.request.urlopen(req, timeout=2).close()
+    except OSError:
+        pass
+    for _ in range(20):  # warten, bis der Port frei ist
+        try:
+            urllib.request.urlopen(f"{basis}/api/ping-frei", timeout=0.5).close()
+            time.sleep(0.25)
+        except OSError:
+            break
+    print(f"Ältere Instanz ({antwort.get('stand', 'alt')}) beendet, starte Stand {STAND}", flush=True)
+    return None
 
 
 def main(argv=None) -> int:

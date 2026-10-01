@@ -340,6 +340,14 @@ class Server(unittest.TestCase):
         self.faden.join(5)
         self.assertFalse(tmp.exists(), "Temp-Ordner muss beim Beenden weg sein")
 
+    def test_alte_instanz_wird_nach_update_beendet(self):
+        """Läuft eine Instanz mit anderem Programmstand, beendet der Start sie (statt alten Code weiterzunutzen)."""
+        self.assertEqual(app.laufender_server(), app.lade_status()["laufend"])  # gleicher Stand → wiederverwenden
+        with mock.patch.object(app, "STAND", "neuerstand"):
+            self.assertIsNone(app.laufender_server())                       # anderer Stand → beenden
+        self.faden.join(5)
+        self.assertFalse(self.faden.is_alive(), "alte Instanz läuft noch")
+
     def test_waechter_nutzt_monotone_uhr(self):  # Fund 5
         self.post("/api/ping", {})
         self.assertLess(abs(self.zustand.start - time.monotonic()), 60)

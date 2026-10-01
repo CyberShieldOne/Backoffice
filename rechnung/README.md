@@ -1,5 +1,7 @@
 # Rechnung aus Auftragsbestätigung oder SAP-Ariba-Rechnung
 
+Dokumentation: [Anleitung](docs/ANLEITUNG.md) · [Technische Dokumentation](docs/TECHNIK.md)
+
 Füllt `vorlagen/2026-OKT_CS-Rechnung_Vorlage.dotx` mit den Daten einer CS-Auftragsbestätigung (PDF)
 oder einer SAP-Ariba-„Standardrechnung“ (z. B. Infineon Supplier Portal, `quelle_ariba.py`).
 Die Belegart wird automatisch erkannt.
