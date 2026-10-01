@@ -17,6 +17,7 @@ from decimal import Decimal
 import rechnung_aus_ab as ra
 
 QUELLE = "SAP Ariba"
+SEITENZAEHLER = re.compile(r"Page\s+\d+|\d+\s*/\s*\d+")
 
 
 def variante(text: str) -> str | None:
@@ -75,12 +76,15 @@ def _woerter(pdf) -> tuple[list[dict], str]:
     """Wörter aller Seiten untereinander (Positionen können umbrechen), ohne Seitenzähler."""
     words, y_off = [], 0.0
     for seite in pdf.pages:
-        for w in seite.extract_words():
-            if w["top"] > seite.height * 0.9 and re.fullmatch(r"Page|\d+|\d+/\d+", w["text"]):
-                continue      # "Page N" bzw. "N/M"
-            w = dict(w)
-            w["top"] += y_off
-            words.append(w)
+        for zeile in ra._zeilen(seite.extract_words()):
+            # Nur ganze Zeilen entfernen, die exakt ein Seitenzähler sind ("Page 2", "2/4") – nie einzelne
+            # Zahlen: Eine Positionszeile am Seitenende behält Menge und Positionsnummer.
+            if zeile[0]["top"] > seite.height * 0.9 and SEITENZAEHLER.fullmatch(ra._text(zeile)):
+                continue
+            for w in zeile:
+                w = dict(w)
+                w["top"] += y_off
+                words.append(w)
         y_off += float(seite.height)
     return words, "\n".join(p.extract_text() or "" for p in pdf.pages)
 

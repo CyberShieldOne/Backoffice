@@ -312,6 +312,34 @@ class Ariba(unittest.TestCase):
             self.assertEqual([p.betrag for p in a.positionen], soll["betraege"])
             self.assertTrue(all("/9" not in p.beschreibung for p in a.positionen))
 
+    def test_seitenzaehler_filter_laesst_zahlen_am_seitenende(self):  # Codex P2 (PR #2)
+        """Nur ganze Seitenzähler-Zeilen entfernen; eine Positionszeile im unteren Seitenzehntel bleibt vollständig."""
+        import quelle_ariba
+
+        def w(x, top, text):
+            return {"x0": x, "x1": x + 5 * len(text), "top": top, "bottom": top + 7, "text": text}
+
+        class Seite:
+            height = 792.0
+
+            def __init__(self, woerter):
+                self.woerter = woerter
+
+            def extract_words(self):
+                return [dict(x) for x in self.woerter]
+
+            def extract_text(self):
+                return ""
+
+        class Pdf:
+            pages = [Seite([w(99, 730, "2"), w(408, 730, "1"), w(413, 730, "/"), w(417, 730, "(1)"),
+                            w(530, 730, "5.600,00"), w(555, 730, "EUR"), w(300, 770, "1/4")]),
+                     Seite([w(300, 770, "Page"), w(330, 770, "2"), w(61, 760, "3")])]
+
+        woerter, _ = quelle_ariba._woerter(Pdf())
+        texte = [x["text"] for x in woerter]
+        self.assertEqual(texte, ["2", "1", "/", "(1)", "5.600,00", "EUR", "3"])
+
     def test_ab_weiterhin_mit_bericht_und_ab(self):
         """Gegenprobe: eine AB erzeugt weiterhin Auftragsbestätigungs- und Bericht/Roadmap-Sätze."""
         with tempfile.TemporaryDirectory() as t:
