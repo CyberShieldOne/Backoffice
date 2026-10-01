@@ -49,9 +49,20 @@ if [ ! -x "$VENV/bin/python" ] || ! cmp -s "$APP/requirements-app.txt" "$STEMPEL
   cp "$APP/requirements-app.txt" "$STEMPEL"
 fi
 
-"$VENV/bin/python" "$APP/app.py"
-RC=$?
-if [ $RC -ne 0 ]; then
-  meldung "CS Rechnung wurde mit Fehler $RC beendet. Details: ~/Library/Application Support/CS-Rechnung/app.log"
+# Server abgekoppelt starten und das Startprogramm sofort beenden: Solange es liefe, hielte macOS
+# die App für "geöffnet", und ein erneuter Doppelklick (z. B. nach Schließen des Tabs) täte nichts.
+# So startet jeder Doppelklick neu; app.py öffnet dann nur das Fenster der laufenden Instanz.
+nohup "$VENV/bin/python" "$APP/app.py" >>"$LOG" 2>&1 </dev/null &
+PID=$!
+for _ in 1 2 3 4 5 6; do
+  sleep 0.5
+  kill -0 "$PID" 2>/dev/null || break
+done
+if ! kill -0 "$PID" 2>/dev/null; then
+  wait "$PID"; RC=$?
+  if [ "$RC" -ne 0 ]; then
+    meldung "CS Rechnung konnte nicht starten (Fehler $RC). Details: ~/Library/Application Support/CS-Rechnung/app.log"
+    exit "$RC"
+  fi
 fi
-exit $RC
+exit 0

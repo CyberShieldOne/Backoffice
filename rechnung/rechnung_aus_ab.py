@@ -68,8 +68,9 @@ def parse_datum(text: str) -> dt.date:
 
 
 def parse_betrag(text: str) -> Decimal:
-    """'EUR 4.500,-' / '4.500,00 €' / 'EUR 12.345,67' -> Decimal."""
-    m = re.search(r"(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{1,2}|-{1,2}|–))?", text)
+    """'EUR 4.500,-' / '4500,00 €' / 'EUR 12.345,67' -> Decimal."""
+    # mit Tausenderpunkten (mind. eine Gruppe) ODER ganz ohne – nie nach 3 Ziffern abschneiden
+    m = re.search(r"(\d{1,3}(?:\.\d{3})+(?!\d)|\d+)(?:,(\d{1,2}|-{1,2}|–))?", text)
     if not m:
         raise AbFehler(f"Betrag nicht lesbar: {text!r}")
     ganz = m.group(1).replace(".", "")
@@ -92,6 +93,10 @@ def fmt_betrag(b: Decimal) -> str:
     return f"{'-' if neg else ''}{'.'.join(gruppen)},{cent} €"
 
 
+def ust_von(netto: Decimal) -> Decimal:
+    return (netto * UST_SATZ / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def fmt_datum(d: dt.date) -> str:
     return d.strftime("%d.%m.%Y")
 
@@ -99,6 +104,20 @@ def fmt_datum(d: dt.date) -> str:
 # --------------------------------------------------------------------------
 # Auftragsbestätigung lesen
 # --------------------------------------------------------------------------
+
+@dataclass
+class Hinweis:
+    """Meldung an den Anwender. standard=True: ein Standardwert wurde eingesetzt
+    (die Oberfläche zeigt ihn ohnehin im Formular); option = zugehörige CLI-Option."""
+    text: str
+    option: str = ""
+    standard: bool = False
+
+    def __str__(self) -> str:
+        if self.option:
+            return f"{self.text} ({'überschreibbar mit ' if self.standard else ''}{self.option})"
+        return self.text
+
 
 @dataclass
 class Position:
@@ -127,6 +146,7 @@ class Auftrag:
     liefertermin: dt.date | None = None
     rechnungs_mail: str = ""
     positionen: list[Position] = field(default_factory=list)
+    hinweise: list[Hinweis] = field(default_factory=list)
 
 
 KOPF_LABELS = ["Datum", "Kunde", "Anschrift", "Kunden-Nr.", "Kundenkontakt",
@@ -213,9 +233,14 @@ def lese_ab(pdf_pfad: Path) -> Auftrag:
     if m:
         bestell_nr, bestell_datum = m.group(1), parse_datum(m.group(2))
     liefertermin = None
+    lese_hinweise: list[Hinweis] = []
     m = re.search(r"Liefertermin:?\s*([^\n]+)", text)
     if m:
-        liefertermin = parse_datum(m.group(1))
+        try:
+            liefertermin = parse_datum(m.group(1))
+        except AbFehler:
+            lese_hinweise.append(Hinweis(f"Liefertermin '{m.group(1).strip()}' ist kein Datum – "
+                                         "Leistungsende bitte selbst angeben", "--bis"))
     m = re.search(r"Zahlungsziel:?\s*(\d+)\s*Tage", text)
     if not m:
         raise AbFehler("Zahlungsziel ('Zahlungsziel: N Tage') nicht gefunden")
@@ -248,6 +273,7 @@ def lese_ab(pdf_pfad: Path) -> Auftrag:
         liefertermin=liefertermin,
         rechnungs_mail=kopf.get("Rechnungsempf", ""),
         positionen=positionen,
+        hinweise=lese_hinweise,
     )
 
 
@@ -411,6 +437,15 @@ class Rechnung:
     ust_id: str
     angebot: str
     auftrag: Auftrag
+    bestell_nr: str = ""                 # Bestellnummer des Kunden (Standard: aus der AB)
+    bestell_datum: dt.date | None = None
+
+    @property
+    def bestellung(self) -> str:
+        """'45104423 vom 29.10.2025' bzw. nur die Nummer."""
+        if not self.bestell_nr:
+            return ""
+        return self.bestell_nr + (f" vom {fmt_datum(self.bestell_datum)}" if self.bestell_datum else "")
 
     @property
     def netto(self) -> Decimal:
@@ -418,7 +453,7 @@ class Rechnung:
 
     @property
     def ust(self) -> Decimal:
-        return (self.netto * UST_SATZ / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return ust_von(self.netto)
 
     @property
     def brutto(self) -> Decimal:
@@ -478,10 +513,45 @@ def _summentabelle_verbreitern(xml: str) -> str:
     return xml[:s] + t + xml[e:]
 
 
+def _infozeile_bestellung(xml: str) -> str:
+    """Infoblock rechts oben (Rechnungsnummer … Kundennummer) um 'Ihre Bestellung' ergänzen:
+    Zeile 'Kundennummer' klonen, Beschriftung tauschen, Wert als Platzhalter [BESTELLUNG]."""
+    zeile = next((m for m in P_RX.finditer(xml)
+                  if "".join(absatz_texte(m.group(0))).startswith("Kundennummer  ")), None)
+    if zeile is None:
+        raise RuntimeError("Zeile 'Kundennummer' in der Vorlage nicht gefunden")
+    neu = _zeile_wie_vorlage(zeile.group(0), "Ihre Bestellung  ", "[BESTELLUNG]")
+    return xml[:zeile.end()] + neu + xml[zeile.end():]
+
+
+def _zeile_wie_vorlage(p_xml: str, label: str, wert: str) -> str:
+    """Absatz mit Label-Run (grau) + Wert-Runs (fett): ersten Text = Label, zweiten = Wert, Rest leer."""
+    ts = list(T_RX.finditer(p_xml))
+    teile, last = [], 0
+    for i, mt in enumerate(ts):
+        txt = label if i == 0 else (wert if i == 1 else "")
+        attrs = mt.group(1) or ""
+        if "xml:space" not in attrs:
+            attrs += ' xml:space="preserve"'
+        teile.append(p_xml[last:mt.start()])
+        teile.append(f"<w:t{attrs}>{html.escape(txt, quote=False)}</w:t>")
+        last = mt.end()
+    teile.append(p_xml[last:])
+    # paraId muss eindeutig bleiben
+    return re.sub(r' w14:paraId="[0-9A-F]+"', "", "".join(teile))
+
+
 def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
     a = r.auftrag
     angebot = (lambda m: f" und des Angebots {r.angebot}") if r.angebot else ""
     regeln_global = [
+        # Bestellnummer des Kunden: Verwendungszweck, Anschreiben, Infoblock (vor den allgemeinen Regeln)
+        (_r(r"Verwendungszweck: Rechnung (?P<ph>\[2026-0142\])"),
+         f"{r.nr} / Bestell-Nr. {r.bestell_nr}" if r.bestell_nr else r.nr),
+        (_r(r"Leistungen gemäß Auftragsbestätigung"),
+         f"Leistungen gemäß Ihrer Bestellung {r.bestellung} und Auftragsbestätigung" if r.bestell_nr
+         else "Leistungen gemäß Auftragsbestätigung"),
+        (_r(r"^Ihre Bestellung  (?P<ph>\[BESTELLUNG\])$"), r.bestellung),
         (_r(r"\[2026-0142\]"), r.nr),
         (_r(r"\[2026-014-AB\]"), a.ab_nr),
         (_r(r" und des Angebots \[2026-014\]"), angebot),
@@ -491,7 +561,7 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
         (_r(r"\[Straße Nr\.\]"), a.strasse),
         (_r(r"\[PLZ Ort\]"), a.plz_ort),
         (_r(r"\[DE…\]"), r.ust_id or "—"),
-        (_r(r"Kostenstelle: (?P<ph>\[—\])"), a.bestell_nr or "—"),
+        (_r(r"Kostenstelle: (?P<ph>\[—\])"), r.bestell_nr or "—"),
         (_r(r"\[K-1042\]"), a.kunden_nr),
         (_r(r"\[TT\.MM\.\] – \[TT\.MM\.JJJJ\]"), r.zeitraum),
         (_r(r"Rechnungsdatum:?\s+(?P<ph>\[TT\.MM\.JJJJ\])"), fmt_datum(r.datum)),
@@ -509,6 +579,8 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
     doc = dateien["word/document.xml"].decode("utf-8")
     doc = _positionszeilen(doc, r)
     doc = _summentabelle_verbreitern(doc)
+    if r.bestell_nr:
+        doc = _infozeile_bestellung(doc)
     doc = ersetze(doc, regeln_global)
     # Summenblock: verbleibende [0,00 €] in Reihenfolge netto, USt, brutto
     summen = iter([r.netto, r.ust, r.brutto])
@@ -551,12 +623,23 @@ def finde_soffice() -> str | None:
 
 
 def nach_pdf(docx: Path) -> Path:
+    """DOCX → PDF mit LibreOffice. Wirft RuntimeError, wenn kein neues PDF entsteht."""
     soffice = finde_soffice()
     if not soffice:
-        raise RuntimeError("LibreOffice (soffice) nicht gefunden – PDF-Export nicht möglich")
-    subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir",
-                    str(docx.parent), str(docx)], check=True, capture_output=True, timeout=180)
-    return docx.with_suffix(".pdf")
+        raise RuntimeError("LibreOffice nicht gefunden")
+    ziel = docx.with_suffix(".pdf")
+    ziel.unlink(missing_ok=True)  # nie ein altes PDF als Ergebnis ausgeben
+    try:
+        lauf = subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir",
+                               str(docx.parent), str(docx)], capture_output=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("LibreOffice hat nicht innerhalb von 3 Minuten geantwortet")
+    if lauf.returncode != 0 or not ziel.exists():
+        grund = (lauf.stderr or lauf.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError("LibreOffice hat kein PDF erzeugt"
+                           + (f" ({grund[-1]})" if grund else "")
+                           + " – läuft LibreOffice gerade? Dann beenden und erneut versuchen")
+    return ziel
 
 
 # --------------------------------------------------------------------------
@@ -567,40 +650,71 @@ def _dateiname(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9ÄÖÜäöüß_-]+", "_", s).strip("_")
 
 
+def rechnungs_dateiname(rechnungsnr: str, kunde: str) -> str:
+    return f"{_dateiname(rechnungsnr)}_Rechnung_{_dateiname(kunde)}.docx"
+
+
+@dataclass
+class Ergebnis:
+    docx: Path
+    pdf: Path | None
+    rechnung: "Rechnung"
+    hinweise: list[Hinweis]
+
+
 def erstelle_rechnung(ab_pdf: Path, rechnungsnr: str, datum: dt.date | None = None,
                       von: dt.date | None = None, bis: dt.date | None = None,
                       uebergabe: dt.date | None = None, ust_id: str = "", angebot: str = "",
                       ausgabe: Path | None = None, vorlage: Path = VORLAGE,
-                      pdf: bool = False) -> tuple[Path, Rechnung, list[str]]:
-    a = lese_ab(ab_pdf)
-    hinweise = []
+                      pdf: bool = False, auftrag: Auftrag | None = None,
+                      bestell_nr: str | None = None, bestell_datum: dt.date | None = None) -> Ergebnis:
+    """Erzeugt die Rechnung. Ein bereits gelesener Auftrag kann übergeben werden.
+    Scheitert nur der PDF-Export, ist das DOCX trotzdem fertig (Hinweis statt Ausnahme)."""
+    a = auftrag or lese_ab(ab_pdf)
+    hinweise = list(a.hinweise)
     datum = datum or dt.date.today()
     if bis is None:
         bis = a.liefertermin or datum
-        hinweise.append(f"Leistungszeitraum-Ende = {'Liefertermin' if a.liefertermin else 'Rechnungsdatum'} "
-                        f"{fmt_datum(bis)} (überschreibbar mit --bis)")
+        hinweise.append(Hinweis(f"Leistungszeitraum-Ende = {'Liefertermin' if a.liefertermin else 'Rechnungsdatum'} "
+                                f"{fmt_datum(bis)}", "--bis", standard=True))
     if von is None:
         von = a.bestell_datum or a.ab_datum
-        hinweise.append(f"Leistungszeitraum-Beginn = {'Bestelldatum' if a.bestell_datum else 'AB-Datum'} "
-                        f"{fmt_datum(von)} (überschreibbar mit --von)")
+        hinweise.append(Hinweis(f"Leistungszeitraum-Beginn = {'Bestelldatum' if a.bestell_datum else 'AB-Datum'} "
+                                f"{fmt_datum(von)}", "--von", standard=True))
     if uebergabe is None:
         uebergabe = bis
-        hinweise.append(f"Übergabe Bericht/Roadmap = {fmt_datum(bis)} (überschreibbar mit --uebergabe)")
+        hinweise.append(Hinweis(f"Übergabe Bericht/Roadmap = {fmt_datum(bis)}", "--uebergabe", standard=True))
     if von > bis:
         raise AbFehler(f"Leistungsbeginn {fmt_datum(von)} liegt nach Leistungsende {fmt_datum(bis)}")
     if not ust_id:
-        hinweise.append("USt-IdNr. des Empfängers nicht in AB – '—' eingesetzt (--ust-id)")
+        hinweise.append(Hinweis("USt-IdNr. des Empfängers nicht angegeben – '—' eingesetzt", "--ust-id"))
     if not angebot:
-        hinweise.append("Angebotsnummer nicht in AB – Verweis auf Angebot entfernt (--angebot)")
+        hinweise.append(Hinweis("Angebotsnummer nicht angegeben – Verweis auf Angebot entfernt", "--angebot"))
+    # Bestellnummer des Kunden: Angabe beim Aufruf hat Vorrang vor der AB ("" = bewusst keine)
+    if bestell_nr is None:
+        bestell_nr, bestell_datum = a.bestell_nr, (bestell_datum or a.bestell_datum)
+    bestell_nr = bestell_nr.strip()
+    if not bestell_nr:
+        bestell_datum = None
+        hinweise.append(Hinweis("Keine Bestellnummer des Kunden – nur '—' unter der Anschrift", "--bestellnr"))
     r = Rechnung(nr=rechnungsnr, datum=datum,
                  faellig=datum + dt.timedelta(days=a.zahlungsziel_tage),
-                 von=von, bis=bis, uebergabe=uebergabe, ust_id=ust_id, angebot=angebot, auftrag=a)
+                 von=von, bis=bis, uebergabe=uebergabe, ust_id=ust_id, angebot=angebot, auftrag=a,
+                 bestell_nr=bestell_nr, bestell_datum=bestell_datum)
     if ausgabe is None:
-        ausgabe = ab_pdf.parent / f"{_dateiname(rechnungsnr)}_Rechnung_{_dateiname(a.kunde)}.docx"
+        ausgabe = ab_pdf.parent / rechnungs_dateiname(rechnungsnr, a.kunde)
+    altes_pdf = ausgabe.with_suffix(".pdf")
     fuelle_vorlage(vorlage, ausgabe, r)
+    pdf_pfad = None
     if pdf:
-        nach_pdf(ausgabe)
-    return ausgabe, r, hinweise
+        try:
+            pdf_pfad = nach_pdf(ausgabe)
+        except RuntimeError as e:
+            hinweise.append(Hinweis(f"PDF-Export fehlgeschlagen: {e}. Das DOCX ist fertig."))
+    elif altes_pdf.exists():
+        altes_pdf.unlink()  # gehörte zur vorherigen Fassung dieser Rechnung
+        hinweise.append(Hinweis(f"Veraltetes {altes_pdf.name} der vorherigen Fassung entfernt"))
+    return Ergebnis(ausgabe, pdf_pfad, r, hinweise)
 
 
 def _datum_arg(s: str) -> dt.date:
@@ -620,22 +734,26 @@ def main(argv=None) -> int:
     ap.add_argument("--uebergabe", type=_datum_arg, help="Übergabe Bericht/Roadmap (Standard: --bis)")
     ap.add_argument("--ust-id", default="", help="USt-IdNr. des Empfängers")
     ap.add_argument("--angebot", default="", help="Angebotsnummer")
+    ap.add_argument("--bestellnr", help="Bestellnummer des Kunden (Standard: aus der AB)")
+    ap.add_argument("--bestelldatum", type=_datum_arg, help="Datum der Bestellung (Standard: aus der AB)")
     ap.add_argument("--vorlage", type=Path, default=VORLAGE)
     ap.add_argument("-o", "--ausgabe", type=Path, help="Ziel-DOCX")
     ap.add_argument("--pdf", action="store_true", help="zusätzlich PDF via LibreOffice")
     args = ap.parse_args(argv)
     try:
-        ziel, r, hinweise = erstelle_rechnung(
+        erg = erstelle_rechnung(
             args.ab_pdf, args.rechnungsnr, args.datum, args.von, args.bis, args.uebergabe,
-            args.ust_id, args.angebot, args.ausgabe, args.vorlage, args.pdf)
+            args.ust_id, args.angebot, args.ausgabe, args.vorlage, args.pdf,
+            bestell_nr=args.bestellnr, bestell_datum=args.bestelldatum)
+        ziel, r, hinweise = erg.docx, erg.rechnung, erg.hinweise
     except AbFehler as e:
         print(f"FEHLER (Auftragsbestätigung): {e}", file=sys.stderr)
         return 2
     a = r.auftrag
-    print(f"Rechnung {r.nr} → {ziel}")
+    print(f"Rechnung {r.nr} → {ziel}" + (f" (+ {erg.pdf.name})" if erg.pdf else ""))
     print(f"  Kunde:      {a.kunde}, {a.strasse}, {a.plz_ort} (z. Hd. {a.kontakt})")
     print(f"  AB:         {a.ab_nr} vom {fmt_datum(a.ab_datum)}, Kunden-Nr. {a.kunden_nr}, "
-          f"Bestellung {a.bestell_nr or '—'}")
+          f"Bestellung {r.bestellung or '—'}")
     print(f"  Leistung:   {a.projekt}, Zeitraum {r.zeitraum}")
     print(f"  Beträge:    netto {fmt_betrag(r.netto)} + USt {fmt_betrag(r.ust)} = {fmt_betrag(r.brutto)}")
     print(f"  Zahlbar bis {fmt_datum(r.faellig)} ({a.zahlungsziel_tage} Tage)")

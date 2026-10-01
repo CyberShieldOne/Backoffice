@@ -84,6 +84,8 @@
   <button class="klein" id="beenden" title="Programm beenden">Beenden</button>
 </header>
 <main>
+  <div id="getrennt" class="meldung fehler versteckt">Keine Verbindung zu CS Rechnung – das Programm wurde beendet.
+    Bitte CS Rechnung neu starten; dieses Fenster kann geschlossen werden.</div>
   <section class="karte">
     <h2><span class="nr">1</span>Auftragsbestätigung</h2>
     <div class="ablage" id="ablage" tabindex="0">
@@ -91,6 +93,7 @@
     </div>
     <input type="file" id="datei" accept="application/pdf,.pdf" class="versteckt">
     <div id="lesefehler" class="meldung fehler versteckt" style="margin-top:12px"></div>
+    <ul id="lesehinweise" class="hinweise versteckt"></ul>
   </section>
 
   <section class="karte versteckt" id="auftrag">
@@ -115,7 +118,7 @@
     </table>
     <div class="summen">
       <div><span>Summe netto</span><span id="s-netto"></span></div>
-      <div><span>Umsatzsteuer 19 %</span><span id="s-ust"></span></div>
+      <div><span id="s-ust-text">Umsatzsteuer</span><span id="s-ust"></span></div>
       <div class="brutto"><span>Rechnungsbetrag</span><span id="s-brutto"></span></div>
     </div>
   </section>
@@ -126,6 +129,9 @@
       <label>Rechnungsnummer<input type="text" id="f-nummer" required></label>
       <label>Rechnungsdatum<input type="date" id="f-datum" required></label>
       <label>Zahlbar bis<input type="text" id="f-faellig" readonly tabindex="-1"></label>
+      <label>Bestellnummer des Kunden<input type="text" id="f-bestellnr" placeholder="keine"></label>
+      <label><span>Bestelldatum <span class="info">(optional)</span></span><input type="date" id="f-bestelldatum"></label>
+      <span></span>
       <label>Leistung von<input type="date" id="f-von" required></label>
       <label>Leistung bis<input type="date" id="f-bis" required></label>
       <label>Bericht übergeben am<input type="date" id="f-uebergabe" required></label>
@@ -148,14 +154,35 @@ const $ = (id) => document.getElementById(id);
 let abId = null, zahlungsziel = 0;
 
 async function api(pfad, body, kopf = {}) {
-  const r = await fetch(pfad, {
-    method: "POST",
-    headers: Object.assign({"X-Token": TOKEN}, body instanceof Blob ? {} : {"Content-Type": "application/json"}, kopf),
-    body: body instanceof Blob ? body : JSON.stringify(body || {}),
-  });
+  let r;
+  try {
+    r = await fetch(pfad, {
+      method: "POST",
+      headers: Object.assign({"X-Token": TOKEN}, body instanceof Blob ? {} : {"Content-Type": "application/json"}, kopf),
+      body: body instanceof Blob ? body : JSON.stringify(body || {}),
+    });
+  } catch (e) {
+    $("getrennt").classList.remove("versteckt");
+    return {status: 0, daten: {fehler: "Keine Verbindung zu CS Rechnung (Programm beendet?)."}};
+  }
+  $("getrennt").classList.add("versteckt");
   let daten = {};
   try { daten = await r.json(); } catch (e) {}
   return {status: r.status, daten};
+}
+
+function ablageText(titel, zusatz) {
+  const ablage = $("ablage");
+  ablage.replaceChildren();
+  const s = document.createElement("strong"); s.textContent = titel;
+  ablage.appendChild(s);
+  if (zusatz) { const z = document.createElement("span"); z.textContent = zusatz; ablage.appendChild(z); }
+}
+
+function hinweisListe(ul, liste) {
+  ul.replaceChildren();
+  (liste || []).forEach((h) => { const li = document.createElement("li"); li.textContent = h; ul.appendChild(li); });
+  ul.classList.toggle("versteckt", !ul.children.length);
 }
 
 function deDatum(iso) {
@@ -167,9 +194,6 @@ function plusTage(iso, n) {
   const d = new Date(iso + "T12:00:00");
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
-}
-function euro(s) {
-  return Number(s).toLocaleString("de-DE", {minimumFractionDigits: 2, maximumFractionDigits: 2}) + " €";
 }
 function setzeText(id, t) { $(id).textContent = t || "—"; }
 
@@ -193,10 +217,11 @@ async function ladeAb(datei) {
   $("ergebnis").classList.add("versteckt");
   const ablage = $("ablage");
   ablage.classList.remove("geladen");
-  ablage.innerHTML = `<strong>Lese ${datei.name} …</strong>`;
+  $("lesehinweise").classList.add("versteckt");
+  ablageText(`Lese ${datei.name} …`);
   const {status, daten} = await api("/api/lesen", datei, {"X-Dateiname": encodeURIComponent(datei.name)});
   if (status !== 200) {
-    ablage.innerHTML = "<strong>AB-PDF hierher ziehen</strong><span>oder klicken zum Auswählen</span>";
+    ablageText("AB-PDF hierher ziehen", "oder klicken zum Auswählen");
     $("lesefehler").textContent = "Konnte die Auftragsbestätigung nicht lesen: " + (daten.fehler || status);
     $("lesefehler").classList.remove("versteckt");
     $("auftrag").classList.add("versteckt");
@@ -207,7 +232,13 @@ async function ladeAb(datei) {
   const a = daten.auftrag;
   zahlungsziel = a.zahlungsziel_tage;
   ablage.classList.add("geladen");
-  ablage.innerHTML = `<strong>✓ ${datei.name}</strong><span class="info">andere AB wählen</span>`;
+  ablageText(`✓ ${datei.name}`, "andere AB wählen");
+  hinweisListe($("lesehinweise"), daten.hinweise);
+  // kundenbezogene Eingaben der vorherigen AB nie übernehmen
+  $("f-ustid").value = "";
+  $("f-angebot").value = "";
+  $("f-bestellnr").value = a.bestell_nr || "";
+  $("f-bestelldatum").value = a.bestell_datum || "";
   setzeText("a-kunde", a.kunde);
   setzeText("a-anschrift", `${a.strasse}, ${a.plz_ort}`);
   setzeText("a-kontakt", a.kontakt);
@@ -217,7 +248,7 @@ async function ladeAb(datei) {
   setzeText("a-bestellung", a.bestell_nr ? `${a.bestell_nr} vom ${deDatum(a.bestell_datum)}` : "");
   setzeText("a-projekt", a.projekt);
   const tb = $("a-positionen");
-  tb.innerHTML = "";
+  tb.replaceChildren();
   a.positionen.forEach((p, i) => {
     const tr = document.createElement("tr");
     const zellen = [String(i + 1).padStart(2, "0"), null, p.menge + (p.einheit ? " × " + p.einheit : ""), p.betrag_fmt];
@@ -232,10 +263,10 @@ async function ladeAb(datei) {
     });
     tb.appendChild(tr);
   });
-  const netto = Number(a.summe_netto), ust = Math.round(netto * 19) / 100;
-  $("s-netto").textContent = euro(netto);
-  $("s-ust").textContent = euro(ust);
-  $("s-brutto").textContent = euro(netto + ust);
+  $("s-netto").textContent = a.netto_fmt;
+  $("s-ust-text").textContent = `Umsatzsteuer ${a.ust_satz} %`;
+  $("s-ust").textContent = a.ust_fmt;
+  $("s-brutto").textContent = a.brutto_fmt;
   const v = daten.vorschlag;
   $("f-von").value = v.von || "";
   $("f-bis").value = v.bis || $("f-datum").value;
@@ -254,7 +285,8 @@ async function erstellen(ueberschreiben = false) {
   const {status, daten} = await api("/api/erstellen", {
     id: abId, nummer: $("f-nummer").value, datum: $("f-datum").value, von: $("f-von").value,
     bis: $("f-bis").value, uebergabe: $("f-uebergabe").value, ust_id: $("f-ustid").value,
-    angebot: $("f-angebot").value, pdf: $("f-pdf").checked, ordner: $("f-ordner").value, ueberschreiben,
+    angebot: $("f-angebot").value, bestell_nr: $("f-bestellnr").value,
+    bestell_datum: $("f-bestelldatum").value, pdf: $("f-pdf").checked, ordner: $("f-ordner").value, ueberschreiben,
   });
   knopf.disabled = false;
   knopf.textContent = "Rechnung erstellen";
@@ -269,9 +301,10 @@ async function erstellen(ueberschreiben = false) {
     return;
   }
   erg.className = "meldung ok";
-  erg.innerHTML = "";
+  erg.replaceChildren();
   const kopf = document.createElement("div");
-  kopf.innerHTML = `<strong>Rechnung erstellt</strong> · ${daten.brutto} brutto · zahlbar bis ${daten.faellig}`;
+  const stark = document.createElement("strong"); stark.textContent = "Rechnung erstellt";
+  kopf.append(stark, ` · ${daten.brutto} brutto · zahlbar bis ${daten.faellig}`);
   const pfad = document.createElement("div");
   pfad.className = "info"; pfad.style.margin = "4px 0 10px"; pfad.textContent = daten.docx;
   const zeile = document.createElement("div");
@@ -279,7 +312,10 @@ async function erstellen(ueberschreiben = false) {
   const knopfMit = (text, ziel, finder) => {
     const b = document.createElement("button");
     b.textContent = text;
-    b.onclick = () => api("/api/oeffnen", {pfad: ziel, finder});
+    b.onclick = async () => {
+      const {status, daten} = await api("/api/oeffnen", {pfad: ziel, finder});
+      if (status !== 200) alert(daten.fehler || "Konnte die Datei nicht öffnen.");
+    };
     zeile.appendChild(b);
   };
   knopfMit("In Word öffnen", daten.docx, false);
@@ -289,8 +325,8 @@ async function erstellen(ueberschreiben = false) {
   if (daten.hinweise.length) {
     const ul = document.createElement("ul");
     ul.className = "hinweise";
-    daten.hinweise.forEach((h) => { const li = document.createElement("li"); li.textContent = h; ul.appendChild(li); });
     erg.appendChild(ul);
+    hinweisListe(ul, daten.hinweise);
   }
   $("f-nummer").value = daten.naechste_nummer;
 }
@@ -308,9 +344,11 @@ $("f-datum").oninput = faelligAktualisieren;
 $("erstellen").onclick = () => erstellen(false);
 $("beenden").onclick = async () => {
   await api("/api/beenden");
-  document.body.innerHTML = '<main><div class="karte">CS Rechnung wurde beendet. Dieses Fenster kann geschlossen werden.</div></main>';
+  clearInterval(lebenszeichen);
+  document.querySelector("main").replaceChildren(Object.assign(document.createElement("div"),
+    {className: "karte", textContent: "CS Rechnung wurde beendet. Dieses Fenster kann geschlossen werden."}));
 };
-setInterval(() => api("/api/ping").catch(() => {}), 10000);
+const lebenszeichen = setInterval(() => api("/api/ping"), 10000);
 start();
 </script>
 </body>

@@ -74,6 +74,10 @@ def fmt_ab_betrag(b: Decimal, stil: int) -> str:
         return "EUR " + s[:-3] + ",-"
     if stil == 1:
         return "EUR " + s
+    if stil == 3:  # ohne Tausenderpunkt
+        return "EUR " + s.replace(".", "")
+    if stil == 4 and s.endswith(",00"):  # ohne Tausenderpunkt, ",-"
+        return "EUR " + s.replace(".", "")[:-3] + ",-"
     return s + " €"
 
 
@@ -96,13 +100,17 @@ def _umbrechen(text: str, n: int) -> list[str]:
     return zeilen + [z]
 
 
-def erzeuge_ab(pfad: Path, rnd: random.Random) -> dict:
-    """Synthetische AB im Layout der echten CS-AB (Koordinaten aus AB-2025-10-29-2)."""
-    ab_datum = dt.date(2025, 1, 1) + dt.timedelta(days=rnd.randint(0, 700))
+def erzeuge_ab(pfad: Path, rnd: random.Random, erzwinge: dict | None = None) -> dict:
+    """Synthetische AB im Layout der echten CS-AB (Koordinaten aus AB-2025-10-29-2).
+    erzwinge: feste Werte für einzelne Zufallsgrößen (mit_liefer, liefer_text, betrag_stil)."""
+    erzwinge = erzwinge or {}
+    ab_datum = dt.date(2025, 1, 1) + dt.timedelta(days=rnd.randint(0, 600))  # vor dem Test-Rechnungsdatum
     bestell_datum = ab_datum - dt.timedelta(days=rnd.randint(0, 5))
     liefer = ab_datum + dt.timedelta(days=rnd.randint(1, 60))
     mit_bestellung = rnd.random() < 0.8
-    mit_liefer = rnd.random() < 0.85
+    mit_liefer = erzwinge.get('mit_liefer', rnd.random() < 0.85)
+    # "Liefertermin: nach Vereinbarung" statt Datum
+    liefer_text = erzwinge.get('liefer_text', rnd.random() < 0.25)
     kunde = rnd.choice(KUNDEN)
     strasse, ort = rnd.choice(STRASSEN), rnd.choice(ORTE)
     komma = rnd.random() < 0.7
@@ -112,7 +120,7 @@ def erzeuge_ab(pfad: Path, rnd: random.Random) -> dict:
     kunden_nr = f"CS-{rnd.randint(1, 12):02d}-{ab_datum.year}-{rnd.randint(1, 99):02d}"
     bestell_nr = str(rnd.randint(10_000_000, 99_999_999))
     ziel = rnd.choice([7, 10, 14, 30])
-    betrag_stil = rnd.randint(0, 2)
+    betrag_stil = erzwinge.get('betrag_stil', rnd.randint(0, 4))
     datum_stil = rnd.randint(0, 2)
 
     pos = []
@@ -120,7 +128,7 @@ def erzeuge_ab(pfad: Path, rnd: random.Random) -> dict:
         produkt, titel = rnd.choice(PRODUKTE)
         cent = rnd.choice([0, 0, 0, rnd.randint(1, 99)])
         betrag = Decimal(rnd.randint(1, 250) * 100 + rnd.choice([0, 50])) + Decimal(cent) / 100
-        if betrag_stil == 0:
+        if betrag_stil in (0, 4):
             betrag = betrag.quantize(Decimal("1"))  # Stil ",-" nur ganze Euro
         pos.append(dict(produkt=produkt, titel=titel, einheit=rnd.choice(EINHEITEN),
                         menge=str(rnd.randint(1, 48)), betrag=betrag,
@@ -154,7 +162,7 @@ def erzeuge_ab(pfad: Path, rnd: random.Random) -> dict:
         txt(71, top, f"Ihre Bestellung {bestell_nr} per Email vom: {bestell_datum:%d.%m.%Y}")
     top += 12
     if mit_liefer:
-        txt(71, top, f"Liefertermin: {fmt_ab_datum(liefer, datum_stil)}")
+        txt(71, top, "Liefertermin: " + ("nach Vereinbarung" if liefer_text else fmt_ab_datum(liefer, datum_stil)))
     top += 53
 
     def fuss():
@@ -216,7 +224,7 @@ def erzeuge_ab(pfad: Path, rnd: random.Random) -> dict:
                 kunden_nr=kunden_nr, kontakt=kontakt, projekt=projekt, summe_netto=summe,
                 zahlungsziel_tage=ziel, bestell_nr=bestell_nr if mit_bestellung else "",
                 bestell_datum=bestell_datum if mit_bestellung else None,
-                liefertermin=liefer if mit_liefer else None,
+                liefertermin=liefer if mit_liefer and not liefer_text else None,
                 positionen=[(p["titel"], p["produkt"], " ".join(p["einheit"]), p["menge"], p["betrag"])
                             for p in pos])
 
@@ -238,7 +246,10 @@ def dokument_text(docx: Path) -> str:
 def pruefe_fall(ab: Path, soll: dict | None, arbeitsdir: Path, nr: str, pdf: bool) -> list[str]:
     fehler = []
     datum = dt.date(2026, 10, 1)
-    ziel, r, _ = ra.erstelle_rechnung(ab, nr, datum=datum, ausgabe=arbeitsdir / f"{nr}.docx", pdf=pdf)
+    erg = ra.erstelle_rechnung(ab, nr, datum=datum, ausgabe=arbeitsdir / f"{nr}.docx", pdf=pdf)
+    ziel, r = erg.docx, erg.rechnung
+    if pdf and erg.pdf is None:
+        fehler.append(f"PDF fehlt: {[str(h) for h in erg.hinweise]}")
     a = r.auftrag
     if soll:
         for k, v in soll.items():
@@ -256,6 +267,12 @@ def pruefe_fall(ab: Path, soll: dict | None, arbeitsdir: Path, nr: str, pdf: boo
                 ra.fmt_betrag(r.netto), ra.fmt_betrag(r.ust), ra.fmt_betrag(r.brutto),
                 ra.fmt_datum(r.datum), ra.fmt_datum(r.faellig), r.zeitraum,
                 f"{a.zahlungsziel_tage} Tage netto"] + [p.titel for p in a.positionen]
+    if a.bestell_nr:  # Bestellnummer des Kunden: Infoblock, Anschreiben, Verwendungszweck
+        erwartet += [f"Ihre Bestellung  {r.bestellung}", f"gemäß Ihrer Bestellung {r.bestellung} und",
+                     f"Verwendungszweck: Rechnung {nr} / Bestell-Nr. {a.bestell_nr}",
+                     f"Kostenstelle: {a.bestell_nr}"]
+    elif "Ihre Bestellung" in text:
+        fehler.append("Bestell-Zeile trotz fehlender Bestellnummer")
     for s in erwartet:
         if s not in text:
             fehler.append(f"fehlt im Dokument: {s!r}")

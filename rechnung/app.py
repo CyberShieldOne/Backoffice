@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -52,14 +53,55 @@ def speichere_status(daten: dict) -> None:
     STATUS_DATEI.write_text(json.dumps(daten, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def naechste_nummer(letzte: str | None, heute: dt.date) -> str:
-    m = re.fullmatch(r"(\d{4})-(\d+)", letzte or "")
-    if not m:
-        return f"{heute.year}-0001"
-    jahr, nr = int(m.group(1)), m.group(2)
-    if jahr != heute.year:
-        return f"{heute.year}-{1:0{len(nr)}d}"
-    return f"{jahr}-{int(nr) + 1:0{len(nr)}d}"
+NR_RX = re.compile(r"^(.*?)(\d+)$")
+
+
+def zerlege_nummer(nr: str) -> tuple[str, str] | None:
+    """'RE-2026-0142' -> ('RE-2026-', '0142'); ohne Ziffern am Ende None."""
+    m = NR_RX.match(nr or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _praefix_schluessel(praefix: str) -> str:
+    # wie im Dateinamen ('2026/' und '2026_' gelten als gleich)
+    return ra._dateiname(praefix)
+
+
+def vergebene_nummern(ordner: Path) -> list[str]:
+    """Rechnungsnummern (in Dateinamen-Schreibweise) der Rechnungen im Ablageordner."""
+    try:
+        return [f.name.split("_Rechnung_", 1)[0] for f in ordner.glob("*_Rechnung_*.docx")]
+    except OSError:
+        return []
+
+
+def naechste_nummer(letzte: str | None, vergeben: list[str], heute: dt.date) -> str:
+    """Höchste bekannte Nummer im Schema der zuletzt verwendeten + 1; neues Jahr → wieder ab 1."""
+    teile = zerlege_nummer(letzte or "")
+    if not teile:
+        praefix, ziffern, hoechste = f"{heute.year}-", "0000", 0
+    else:
+        praefix, ziffern = teile
+        hoechste = int(ziffern)
+        jahr = re.search(r"(?<!\d)(20\d{2})(?!\d)", praefix)
+        if jahr and int(jahr.group(1)) != heute.year:
+            praefix = praefix[:jahr.start(1)] + str(heute.year) + praefix[jahr.end(1):]
+            hoechste = 0
+    schluessel = _praefix_schluessel(praefix)
+    for v in vergeben:
+        t = zerlege_nummer(v)
+        if t and _praefix_schluessel(t[0]) == schluessel:
+            hoechste = max(hoechste, int(t[1]))
+    return f"{praefix}{hoechste + 1:0{len(ziffern)}d}"
+
+
+def hoehere_nummer(gespeichert: str | None, neu: str) -> str:
+    """Gespeicherte 'letzte Nummer' nur vorwärts bewegen (Korrektur einer alten Rechnung
+    darf den Vorschlag nicht zurücksetzen). Neues Schema ersetzt das alte."""
+    a, b = zerlege_nummer(gespeichert or ""), zerlege_nummer(neu)
+    if not a or not b or _praefix_schluessel(a[0]) != _praefix_schluessel(b[0]):
+        return neu
+    return neu if int(b[1]) >= int(a[1]) else gespeichert  # type: ignore[return-value]
 
 
 def iso(d: dt.date | None) -> str | None:
@@ -76,7 +118,17 @@ def auftrag_json(a: ra.Auftrag) -> dict:
         "positionen": [{"titel": p.titel, "produkt": p.produkt, "einheit": p.einheit,
                         "menge": p.menge, "betrag": str(p.betrag),
                         "betrag_fmt": ra.fmt_betrag(p.betrag)} for p in a.positionen],
+        # Beträge rechnet nur der Server (gleiche Rundung wie auf der Rechnung)
+        "ust_satz": str(ra.UST_SATZ),
+        "netto_fmt": ra.fmt_betrag(a.summe_netto),
+        "ust_fmt": ra.fmt_betrag(ra.ust_von(a.summe_netto)),
+        "brutto_fmt": ra.fmt_betrag(a.summe_netto + ra.ust_von(a.summe_netto)),
     }
+
+
+def hinweise_fuer_ui(hinweise: list[ra.Hinweis]) -> list[str]:
+    # Standardwerte stehen bereits im Formular; CLI-Optionen interessieren in der Oberfläche nicht
+    return [h.text for h in hinweise if not h.standard]
 
 
 def oeffne(pfad: Path, im_finder: bool = False) -> None:
@@ -92,9 +144,10 @@ class Zustand:
     def __init__(self, token: str):
         self.token = token
         self.letzter_kontakt = None  # type: float | None
-        self.start = time.time()
-        self.uploads: dict[str, Path] = {}
+        self.start = time.monotonic()  # monotonic: Ruhezustand des Macs zählt nicht als Leerlauf
+        self.uploads: dict[str, tuple[Path, ra.Auftrag]] = {}
         self.tmp = Path(tempfile.mkdtemp(prefix="cs-rechnung-"))
+        self.erstellt: set[str] = set()  # nur diese Dateien darf /api/oeffnen öffnen
         self.lock = threading.Lock()
 
 
@@ -136,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == f"/{z.token}/" or self.path == f"/{z.token}":
             html = (HIER / "ui" / "index.html").read_text(encoding="utf-8")
             html = html.replace("__TOKEN__", z.token)
-            z.letzter_kontakt = time.time()
+            z.letzter_kontakt = time.monotonic()
             return self._antwort(200, html.encode("utf-8"), "text/html; charset=utf-8")
         if self.path == "/api/ping-frei":  # für zweiten App-Start
             return self._antwort(200, {"ok": True})
@@ -146,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
         z = self.zustand
         if not self._token_ok():
             return self._fehler(403, "Zugriff verweigert")
-        z.letzter_kontakt = time.time()
+        z.letzter_kontakt = time.monotonic()
         try:
             if self.path == "/api/ping":
                 return self._antwort(200, {"ok": True})
@@ -159,6 +212,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/oeffnen":
                 d = self._json()
                 pfad = Path(d["pfad"])
+                if str(pfad) not in z.erstellt:
+                    return self._fehler(403, "Nur in dieser Sitzung erstellte Rechnungen können geöffnet werden.")
                 if not pfad.exists():
                     return self._fehler(404, "Datei nicht gefunden")
                 oeffne(pfad, bool(d.get("finder")))
@@ -176,9 +231,10 @@ class Handler(BaseHTTPRequestHandler):
     def _start(self):
         st = lade_status()
         heute = dt.date.today()
+        ordner = st.get("ordner") or str(STANDARD_ORDNER)
         return self._antwort(200, {
-            "ordner": st.get("ordner") or str(STANDARD_ORDNER),
-            "nummer": naechste_nummer(st.get("letzte_nummer"), heute),
+            "ordner": ordner,
+            "nummer": naechste_nummer(st.get("letzte_nummer"), vergebene_nummern(Path(ordner)), heute),
             "heute": heute.isoformat(),
             "pdf_moeglich": ra.finde_soffice() is not None,
             "pdf": bool(st.get("pdf", False)),
@@ -193,21 +249,30 @@ class Handler(BaseHTTPRequestHandler):
         uid = secrets.token_hex(8)
         pfad = self.zustand.tmp / f"{uid}_{name}"
         pfad.write_bytes(daten)
-        a = ra.lese_ab(pfad)
+        try:
+            a = ra.lese_ab(pfad)
+        except Exception:
+            pfad.unlink(missing_ok=True)
+            raise
         with self.zustand.lock:
-            self.zustand.uploads[uid] = pfad
+            # nur die aktuelle AB vorhalten, frühere Kunden-PDFs sofort löschen
+            for alt, _ in self.zustand.uploads.values():
+                alt.unlink(missing_ok=True)
+            self.zustand.uploads = {uid: (pfad, a)}
         von = a.bestell_datum or a.ab_datum
         bis = a.liefertermin
         return self._antwort(200, {
             "id": uid, "auftrag": auftrag_json(a),
             "vorschlag": {"von": iso(von), "bis": iso(bis), "uebergabe": iso(bis)},
+            "hinweise": hinweise_fuer_ui(a.hinweise),
         })
 
     def _erstellen(self):
         d = self._json()
-        pfad = self.zustand.uploads.get(d.get("id", ""))
-        if not pfad:
+        eintrag = self.zustand.uploads.get(d.get("id", ""))
+        if not eintrag:
             return self._fehler(400, "Bitte zuerst eine Auftragsbestätigung laden.")
+        pfad, a = eintrag
         nr = (d.get("nummer") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,40}", nr):
             return self._fehler(422, "Rechnungsnummer fehlt oder enthält ungültige Zeichen.")
@@ -216,34 +281,50 @@ class Handler(BaseHTTPRequestHandler):
             v = d.get(k)
             return dt.date.fromisoformat(v) if v else None
 
-        ordner = Path(os.path.expanduser((d.get("ordner") or str(STANDARD_ORDNER)).strip()))
-        a = ra.lese_ab(pfad)
-        ziel = ordner / f"{ra._dateiname(nr)}_Rechnung_{ra._dateiname(a.kunde)}.docx"
+        ordner_text = (d.get("ordner") or str(STANDARD_ORDNER)).strip()
+        ordner = Path(os.path.expanduser(ordner_text))
+        if not ordner.is_absolute():
+            return self._fehler(422, f"Ablageordner '{ordner_text}' ist kein vollständiger Pfad – "
+                                     "z. B. ~/Documents/Rechnungen angeben.")
+        ziel = ordner / ra.rechnungs_dateiname(nr, a.kunde)
+        # gleiche Nummer schon für einen anderen Kunden vergeben? → nie überschreibbar
+        praefix = ra._dateiname(nr) + "_Rechnung_"
+        fremd = [f.name for f in ordner.glob(praefix + "*.docx") if f.name != ziel.name] if ordner.is_dir() else []
+        if fremd:
+            return self._fehler(409, f"Rechnungsnummer {nr} ist bereits vergeben ({fremd[0]}).")
         if ziel.exists() and not d.get("ueberschreiben"):
             return self._antwort(409, {"fehler": f"{ziel.name} existiert bereits.", "existiert": True})
-        ziel_pfad, r, hinweise = ra.erstelle_rechnung(
-            pfad, nr, datum=datum("datum"), von=datum("von"), bis=datum("bis"),
-            uebergabe=datum("uebergabe"), ust_id=(d.get("ust_id") or "").strip(),
-            angebot=(d.get("angebot") or "").strip(), ausgabe=ziel, pdf=bool(d.get("pdf")))
+        try:
+            erg = ra.erstelle_rechnung(
+                pfad, nr, datum=datum("datum"), von=datum("von"), bis=datum("bis"),
+                uebergabe=datum("uebergabe"), ust_id=(d.get("ust_id") or "").strip(),
+                angebot=(d.get("angebot") or "").strip(), ausgabe=ziel, pdf=bool(d.get("pdf")),
+                auftrag=a, bestell_nr=(d.get("bestell_nr") or "").strip(),
+                bestell_datum=datum("bestell_datum"))
+        except OSError as e:
+            return self._fehler(422, f"Ablageordner nicht beschreibbar: {e.strerror or e} ({ordner})")
+        r = erg.rechnung
+        self.zustand.erstellt.update(str(x) for x in (erg.docx, erg.pdf) if x)
         st = lade_status()
-        st.update({"ordner": str(ordner), "letzte_nummer": nr, "pdf": bool(d.get("pdf"))})
+        st.update({"ordner": str(ordner), "letzte_nummer": hoehere_nummer(st.get("letzte_nummer"), nr),
+                   "pdf": bool(d.get("pdf"))})
         speichere_status(st)
-        pdf_pfad = ziel_pfad.with_suffix(".pdf")
         return self._antwort(200, {
-            "docx": str(ziel_pfad),
-            "pdf": str(pdf_pfad) if d.get("pdf") and pdf_pfad.exists() else None,
+            "docx": str(erg.docx),
+            "pdf": str(erg.pdf) if erg.pdf else None,
             "netto": ra.fmt_betrag(r.netto), "ust": ra.fmt_betrag(r.ust),
             "brutto": ra.fmt_betrag(r.brutto), "faellig": ra.fmt_datum(r.faellig),
             "zeitraum": r.zeitraum,
-            "hinweise": [re.sub(r"\s*\(--[\w-]+\)$", "", h) for h in hinweise if "überschreibbar" not in h],
-            "naechste_nummer": naechste_nummer(nr, dt.date.today()),
+            "hinweise": hinweise_fuer_ui(erg.hinweise),
+            "naechste_nummer": naechste_nummer(st["letzte_nummer"], vergebene_nummern(ordner),
+                                               dt.date.today()),
         })
 
 
 def waechter(server: ThreadingHTTPServer, z: Zustand):
     while True:
         time.sleep(3)
-        jetzt = time.time()
+        jetzt = time.monotonic()
         if z.letzter_kontakt is None:
             if jetzt - z.start > ERSTKONTAKT_S:
                 break
@@ -291,6 +372,8 @@ def main(argv=None) -> int:
     try:
         server.serve_forever()
     finally:
+        server.server_close()
+        shutil.rmtree(z.tmp, ignore_errors=True)  # hochgeladene Kunden-PDFs nicht liegen lassen
         st = lade_status()
         if st.get("laufend") == url:
             st.pop("laufend")
