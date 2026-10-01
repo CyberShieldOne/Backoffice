@@ -23,6 +23,14 @@ const path = require('path');
   pruefe(await p.evaluate(() => window.__xss === undefined), 'Dateiname wird nicht als HTML ausgeführt');
   pruefe((await p.textContent('#ablage')).includes('<img'), 'Dateiname erscheint als Text');
 
+  // Rechnungsnummer frei eingebbar: Vorschlag sichtbar, eigene Eingabe bleibt
+  pruefe((await p.textContent('#f-nummer-vorschlag')).includes('Vorschlag'), 'Vorschlag wird angezeigt');
+  await p.fill('#f-nummer', 'RE 2026/77');
+  pruefe((await p.textContent('#f-nummer-vorschlag')).includes('übernehmen'), 'Vorschlag übernehmbar nach eigener Eingabe');
+  await p.click('#erstellen');
+  await p.waitForSelector('#ergebnis.meldung');
+  pruefe((await p.textContent('#ergebnis')).includes('RE_2026_77_Rechnung_OHB_SE.docx'), 'eigene Nummer verwendet');
+
   // Grundablauf A (OHB-AB: Bestellnummer 45104423 vorbelegt, hier überschrieben)
   pruefe(await p.inputValue('#f-bestellnr') === '45104423', 'Bestellnummer der OHB-AB vorbelegt');
   await p.fill('#f-bestellnr', 'PO-4711');
@@ -31,9 +39,10 @@ const path = require('path');
   await p.fill('#f-ustid', 'DE123456789');
   await p.fill('#f-angebot', '2026-014');
   await p.click('#erstellen');
-  await p.waitForSelector('#ergebnis.meldung');
+  await p.waitForFunction(() => document.getElementById('ergebnis').textContent.includes('2026-0500'));
   pruefe((await p.textContent('#ergebnis')).includes('Rechnung erstellt'), 'Rechnung A erstellt');
-  pruefe(await p.inputValue('#f-nummer') === '2026-0501', 'nächste Nummer vorgeschlagen');
+  const naechste = await p.inputValue('#f-nummer');
+  pruefe(naechste === '2026-0501', 'nächste Nummer vorgeschlagen (' + naechste + ')');
   // Historie
   await p.waitForSelector('#historie-liste tr.neu');
   const zeile = await p.textContent('#historie-liste tr.neu');

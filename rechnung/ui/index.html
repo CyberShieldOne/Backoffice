@@ -59,6 +59,7 @@
   input:focus { outline: none; border-color: var(--magenta); box-shadow: 0 0 0 3px var(--fokus); }
   .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
   .info { color: var(--leise); font-size: 12px; }
+  .info a { color: var(--magenta); }
   .zeile { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
   button { font: inherit; border-radius: 7px; padding: 9px 16px; cursor: pointer; border: 1px solid var(--linie);
            background: var(--karte); color: var(--text); }
@@ -136,7 +137,9 @@
   <section class="karte versteckt" id="rechnung">
     <h2><span class="nr">3</span>Rechnungsdaten</h2>
     <form id="formular" autocomplete="off">
-      <label>Rechnungsnummer<input type="text" id="f-nummer" required></label>
+      <label><span>Rechnungsnummer <span class="info">(frei eingebbar)</span></span>
+        <input type="text" id="f-nummer" required maxlength="40" placeholder="z. B. 2026-0142">
+        <span class="info" id="f-nummer-vorschlag"></span></label>
       <label>Rechnungsdatum<input type="date" id="f-datum" required></label>
       <label>Zahlbar bis<input type="text" id="f-faellig" readonly tabindex="-1"></label>
       <label>Bestellnummer des Kunden<input type="text" id="f-bestellnr" placeholder="keine"></label>
@@ -219,9 +222,23 @@ function faelligAktualisieren() {
   $("f-faellig").value = d ? `${deDatum(plusTage(d, zahlungsziel))} (${zahlungsziel} Tage)` : "";
 }
 
+let vorschlag = "";
+function zeigeVorschlag(nr) {
+  vorschlag = nr;
+  const el = $("f-nummer-vorschlag");
+  el.replaceChildren();
+  if ($("f-nummer").value === nr) { el.textContent = "Vorschlag: nächste freie Nummer"; return; }
+  el.append(`Vorschlag: ${nr} `);
+  const a = document.createElement("a");
+  a.href = "#"; a.textContent = "übernehmen";
+  a.onclick = (e) => { e.preventDefault(); $("f-nummer").value = nr; zeigeVorschlag(nr); };
+  el.appendChild(a);
+}
+
 async function start() {
   const {daten} = await api("/api/start");
-  $("f-nummer").value = daten.nummer;
+  if (!$("f-nummer").value) $("f-nummer").value = daten.nummer;  // eigene Eingabe nie überschreiben
+  zeigeVorschlag(daten.nummer);
   $("f-datum").value = daten.heute;
   $("f-ordner").value = daten.ordner;
   $("f-pdf").checked = daten.pdf && daten.pdf_moeglich;
@@ -343,6 +360,7 @@ async function erstellen(ueberschreiben = false) {
     hinweisListe(ul, daten.hinweise);
   }
   $("f-nummer").value = daten.naechste_nummer;
+  zeigeVorschlag(daten.naechste_nummer);
   neuMarkiert = daten.docx;
   ladeHistorie();
 }
@@ -357,6 +375,8 @@ ablage.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => e.preventDefault());
 $("f-datum").oninput = faelligAktualisieren;
+$("f-nummer").onfocus = (e) => e.target.select();  // Tippen ersetzt den Vorschlag
+$("f-nummer").oninput = () => zeigeVorschlag(vorschlag);
 $("erstellen").onclick = () => erstellen(false);
 $("beenden").onclick = async () => {
   await api("/api/beenden");

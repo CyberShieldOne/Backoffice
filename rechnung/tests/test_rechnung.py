@@ -260,6 +260,8 @@ def pruefe_fall(ab: Path, soll: dict | None, arbeitsdir: Path, nr: str, pdf: boo
             elif getattr(a, k) != v:
                 fehler.append(f"{k}: ist {getattr(a, k)!r} soll {v!r}")
     text = dokument_text(ziel)
+    if "cyber-shield.org" not in text or "cyber-shield.dev" in text:
+        fehler.append("Webseite in der Fußzeile nicht cyber-shield.org")
     rest = ra.PLATZHALTER_RX.findall(text)
     if rest:
         fehler.append(f"Platzhalter übrig: {rest}")

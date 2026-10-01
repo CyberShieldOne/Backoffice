@@ -318,8 +318,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._fehler(400, "Bitte zuerst eine Auftragsbestätigung laden.")
         pfad, a = eintrag
         nr = (d.get("nummer") or "").strip()
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,40}", nr):
-            return self._fehler(422, "Rechnungsnummer fehlt oder enthält ungültige Zeichen.")
+        if not nr:
+            return self._fehler(422, "Bitte eine Rechnungsnummer eingeben.")
+        if not re.fullmatch(r"[A-Za-z0-9ÄÖÜäöü][A-Za-z0-9ÄÖÜäöü ._/#+-]{0,39}", nr):
+            return self._fehler(422, f"Rechnungsnummer '{nr}' enthält Zeichen, die nicht erlaubt sind. "
+                                     "Erlaubt: Buchstaben, Ziffern, Leerzeichen und . _ / # + -")
 
         def datum(k):
             v = d.get(k)

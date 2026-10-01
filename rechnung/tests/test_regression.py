@@ -145,6 +145,26 @@ class Bestellnummer(unittest.TestCase):  # Wunsch: Bestellnummer des Kunden ber�
             self.assertTrue(any("Bestellnummer" in h.text for h in erg.hinweise))
 
 
+class Vorlage(unittest.TestCase):  # Fußzeile, Webseite, Schrift
+    def test_fusszeile_und_schrift(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as t:
+            pfad, _ = ab_pdf(Path(t))
+            erg = ra.erstelle_rechnung(pfad, "RE 2026/77", datum=HEUTE, ausgabe=Path(t) / "r.docx")
+            with zipfile.ZipFile(erg.docx) as z:
+                fuss = z.read("word/footer1.xml").decode()
+                stile = z.read("word/styles.xml").decode()
+            texte = ra.absatz_texte(fuss)
+            self.assertIn("Rechnung RE 2026/77 · cyber-shield.org", texte)
+            self.assertNotIn("cyber-shield.dev", fuss)
+            self.assertIn("IBAN DE67 5075 0094 0000 0954 31", texte)
+            # Seitenzahlen gleich formatiert wie der Text daneben
+            self.assertEqual(fuss.count('<w:fldChar w:fldCharType="begin"/>'), 2)
+            self.assertNotIn("<w:r><w:fldChar", fuss)
+            self.assertIn('w:ascii="Calibri"', stile)
+            self.assertNotIn("Carlito", stile)
+
+
 class Hinweise(unittest.TestCase):  # Fund 14
     def test_ui_ohne_standardwerte_und_cli_optionen(self):
         hs = [ra.Hinweis("Leistungsende = 01.10.2026", "--bis", standard=True),
@@ -236,6 +256,16 @@ class Server(unittest.TestCase):
         self.assertEqual(f["naechste_nummer"], "2026-0143")
         st, s = self.post("/api/start", {})
         self.assertEqual(s["nummer"], "2026-0143")
+
+        # Rechnungsnummer frei eingebbar (Leerzeichen, Schrägstrich); ungültige Zeichen klar gemeldet
+        st, f = self.erstellen(db["id"], "RE 2026/77")
+        self.assertEqual(st, 200, f)
+        self.assertTrue(f["docx"].endswith("RE_2026_77_Rechnung_" + ra._dateiname(db["auftrag"]["kunde"]) + ".docx"))
+        st, f = self.erstellen(db["id"], "2026<0001>")
+        self.assertEqual(st, 422)
+        self.assertIn("Erlaubt:", f["fehler"])
+        st, f = self.erstellen(db["id"], "  ")
+        self.assertEqual(st, 422)
 
         # nur selbst erstellte Dateien dürfen geöffnet werden
         st, _ = self.post("/api/oeffnen", {"pfad": "/etc/passwd"})
