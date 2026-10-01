@@ -34,6 +34,18 @@ const path = require('path');
   await p.waitForSelector('#ergebnis.meldung');
   pruefe((await p.textContent('#ergebnis')).includes('Rechnung erstellt'), 'Rechnung A erstellt');
   pruefe(await p.inputValue('#f-nummer') === '2026-0501', 'nächste Nummer vorgeschlagen');
+  // Historie
+  await p.waitForSelector('#historie-liste tr.neu');
+  const zeile = await p.textContent('#historie-liste tr.neu');
+  pruefe(zeile.includes('2026-0500') && zeile.includes('OHB SE') && zeile.includes('5.355,00 €'),
+         'neue Rechnung oben in der Historie markiert');
+  await p.fill('#h-suche', 'gibtsnicht');
+  pruefe((await p.textContent('#historie-liste')).includes('Keine Treffer'), 'Suche filtert');
+  await p.fill('#h-suche', 'ohb');
+  const treffer = await p.locator('#historie-liste tbody tr').allTextContents();
+  pruefe(treffer.length >= 1 && treffer.every(t => t.includes('OHB')), 'Suche findet nur passende Kunden');
+  await p.fill('#h-suche', '');
+  await p.screenshot({ path: path.join(arbeit, 'ui_historie.png'), fullPage: true });
 
   // Fund 2: neue AB → USt-ID/Angebot geleert
   await p.setInputFiles('#datei', abB);

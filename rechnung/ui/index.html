@@ -71,6 +71,16 @@
   .meldung.ok strong { color: var(--ok); }
   .hinweise { margin: 10px 0 0; padding-left: 18px; color: var(--warn); font-size: 12px; }
   .versteckt { display: none !important; }
+  .kopfzeile { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .kopfzeile h2 { margin: 0; }
+  .kopfzeile input { margin-left: auto; max-width: 260px; }
+  #historie-liste { max-height: 360px; overflow-y: auto; }
+  #historie-liste table { margin-top: 0; }
+  #historie-liste td { vertical-align: middle; }
+  #historie-liste td.aktionen { white-space: nowrap; text-align: right; }
+  #historie-liste button { padding: 4px 10px; font-size: 12px; margin-left: 4px; }
+  #historie-liste tr.neu td { background: rgba(214, 50, 138, .06); }
+  .leer { color: var(--leise); padding: 8px 0; }
   @media (max-width: 720px) {
     .raster, form { grid-template-columns: 1fr; }
     label.breit { grid-column: auto; }
@@ -145,6 +155,13 @@
       <span class="info" id="pdf-info"></span>
     </div>
     <div id="ergebnis" class="versteckt" style="margin-top:16px"></div>
+  </section>
+  <section class="karte" id="historie">
+    <div class="kopfzeile">
+      <h2>Letzte Rechnungen</h2>
+      <input type="text" id="h-suche" placeholder="Suchen (Nummer, Kunde …)" aria-label="Historie durchsuchen">
+    </div>
+    <div id="historie-liste"></div>
   </section>
 </main>
 
@@ -312,10 +329,7 @@ async function erstellen(ueberschreiben = false) {
   const knopfMit = (text, ziel, finder) => {
     const b = document.createElement("button");
     b.textContent = text;
-    b.onclick = async () => {
-      const {status, daten} = await api("/api/oeffnen", {pfad: ziel, finder});
-      if (status !== 200) alert(daten.fehler || "Konnte die Datei nicht öffnen.");
-    };
+    b.onclick = () => oeffnen(ziel, finder);
     zeile.appendChild(b);
   };
   knopfMit("In Word öffnen", daten.docx, false);
@@ -329,6 +343,8 @@ async function erstellen(ueberschreiben = false) {
     hinweisListe(ul, daten.hinweise);
   }
   $("f-nummer").value = daten.naechste_nummer;
+  neuMarkiert = daten.docx;
+  ladeHistorie();
 }
 
 const ablage = $("ablage");
@@ -349,7 +365,64 @@ $("beenden").onclick = async () => {
     {className: "karte", textContent: "CS Rechnung wurde beendet. Dieses Fenster kann geschlossen werden."}));
 };
 const lebenszeichen = setInterval(() => api("/api/ping"), 10000);
+function knopf(text, aktion) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = text; b.onclick = aktion;
+  return b;
+}
+
+async function oeffnen(pfad, finder) {
+  const {status, daten} = await api("/api/oeffnen", {pfad, finder});
+  if (status !== 200) alert(daten.fehler || "Konnte die Datei nicht öffnen.");
+}
+
+let historieDaten = [], neuMarkiert = null;
+
+function zeigeHistorie() {
+  const ziel = $("historie-liste");
+  const q = $("h-suche").value.trim().toLowerCase();
+  const liste = historieDaten.filter((e) => !q ||
+    [e.nummer, e.kunde, e.projekt, e.ab_nr, e.brutto].some((x) => (x || "").toLowerCase().includes(q)));
+  ziel.replaceChildren();
+  if (!liste.length) {
+    ziel.appendChild(Object.assign(document.createElement("div"), {className: "leer",
+      textContent: historieDaten.length ? "Keine Treffer." : "Noch keine Rechnungen im Ablageordner."}));
+    return;
+  }
+  const t = document.createElement("table");
+  t.innerHTML = '<thead><tr><th>Nr.</th><th>Kunde</th><th>Datum</th><th class="zahl">Brutto</th><th></th></tr></thead>';
+  const tb = document.createElement("tbody");
+  liste.forEach((e) => {
+    const tr = document.createElement("tr");
+    if (e.docx === neuMarkiert) tr.className = "neu";
+    const datum = e.rechnungsdatum ? deDatum(e.rechnungsdatum) : deDatum((e.erstellt || "").slice(0, 10));
+    const kunde = document.createElement("td");
+    kunde.textContent = e.kunde;
+    if (e.projekt) { const s = document.createElement("small"); s.textContent = e.projekt; kunde.appendChild(s); }
+    const zellen = [Object.assign(document.createElement("td"), {textContent: e.nummer}), kunde,
+      Object.assign(document.createElement("td"), {textContent: datum}),
+      Object.assign(document.createElement("td"), {textContent: e.brutto || "—", className: "zahl"})];
+    const akt = document.createElement("td");
+    akt.className = "aktionen";
+    akt.append(knopf("Word", () => oeffnen(e.docx, false)));
+    if (e.pdf) akt.append(knopf("PDF", () => oeffnen(e.pdf, false)));
+    akt.append(knopf("Finder", () => oeffnen(e.docx, true)));
+    zellen.push(akt);
+    tr.append(...zellen);
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  ziel.appendChild(t);
+}
+
+async function ladeHistorie() {
+  const {status, daten} = await api("/api/historie");
+  if (status === 200) { historieDaten = daten.eintraege; zeigeHistorie(); }
+}
+$("h-suche").oninput = zeigeHistorie;
+
 start();
+ladeHistorie();
 </script>
 </body>
 </html>

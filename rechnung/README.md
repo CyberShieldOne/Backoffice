@@ -34,5 +34,6 @@ Tests:
 `macos/build_app.sh` baut `dist/CS Rechnung.app` (+ ZIP). Die App richtet beim ersten Start eine eigene
 Python-Umgebung in `~/Library/Application Support/CS-Rechnung/` ein und öffnet die Oberfläche (`app.py` + `ui/index.html`,
 Server nur auf 127.0.0.1 mit Zugriffstoken) im Standardbrowser. Rechnungen landen standardmäßig in `~/Documents/Rechnungen`.
+Unten in der App: „Letzte Rechnungen“ (gemerkte Rechnungen + alle `*_Rechnung_*.docx` im Ablageordner, durchsuchbar, öffnen in Word/PDF/Finder).
 Ohne geöffnetes Fenster beendet sie sich nach 5 Minuten selbst. Log: `~/Library/Application Support/CS-Rechnung/app.log`.
 Voraussetzung: Python ≥ 3.9 (`xcode-select --install`, Homebrew oder python.org). PDF-Export nur mit LibreOffice.

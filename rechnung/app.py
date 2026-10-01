@@ -75,6 +75,42 @@ def vergebene_nummern(ordner: Path) -> list[str]:
         return []
 
 
+HISTORIE_MAX = 200
+
+
+def merke_in_historie(st: dict, eintrag: dict) -> None:
+    """Rechnung vorne in die Historie (gleiche Datei ersetzt den alten Eintrag)."""
+    alt = [e for e in st.get("historie", []) if e.get("docx") != eintrag["docx"]]
+    st["historie"] = [eintrag] + alt[:HISTORIE_MAX - 1]
+
+
+def historie(st: dict, ordner: Path, anzahl: int = 50) -> list[dict]:
+    """Letzte Rechnungen: gemerkte Einträge, deren DOCX noch existiert, plus Rechnungen im
+    Ablageordner ohne Eintrag (z. B. per Kommandozeile erstellt) – neueste zuerst."""
+    eintraege, bekannt = [], set()
+    for e in st.get("historie", []):
+        docx = Path(e.get("docx", ""))
+        if docx.is_file():
+            pdf = docx.with_suffix(".pdf")
+            eintraege.append(dict(e, pdf=str(pdf) if pdf.is_file() else None))
+            bekannt.add(str(docx))
+    try:
+        dateien = list(ordner.glob("*_Rechnung_*.docx"))
+    except OSError:
+        dateien = []
+    for f in dateien:
+        if str(f) in bekannt or f.name.startswith("~$"):
+            continue
+        nr, kunde = f.stem.split("_Rechnung_", 1)
+        zeit = dt.datetime.fromtimestamp(f.stat().st_mtime)
+        pdf = f.with_suffix(".pdf")
+        eintraege.append({"nummer": nr, "kunde": kunde.replace("_", " "), "brutto": None,
+                          "rechnungsdatum": None, "erstellt": zeit.isoformat(timespec="seconds"),
+                          "docx": str(f), "pdf": str(pdf) if pdf.is_file() else None})
+    eintraege.sort(key=lambda e: e.get("erstellt") or "", reverse=True)
+    return eintraege[:anzahl]
+
+
 def naechste_nummer(letzte: str | None, vergeben: list[str], heute: dt.date) -> str:
     """Höchste bekannte Nummer im Schema der zuletzt verwendeten + 1; neues Jahr → wieder ab 1."""
     teile = zerlege_nummer(letzte or "")
@@ -209,11 +245,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._lesen()
             if self.path == "/api/erstellen":
                 return self._erstellen()
+            if self.path == "/api/historie":
+                st = lade_status()
+                return self._antwort(200, {"eintraege": historie(st, Path(st.get("ordner") or STANDARD_ORDNER))})
             if self.path == "/api/oeffnen":
                 d = self._json()
                 pfad = Path(d["pfad"])
-                if str(pfad) not in z.erstellt:
-                    return self._fehler(403, "Nur in dieser Sitzung erstellte Rechnungen können geöffnet werden.")
+                if str(pfad) not in z.erstellt and str(pfad) not in self._historie_dateien():
+                    return self._fehler(403, "Nur Rechnungen aus der Historie können geöffnet werden.")
                 if not pfad.exists():
                     return self._fehler(404, "Datei nicht gefunden")
                 oeffne(pfad, bool(d.get("finder")))
@@ -227,6 +266,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             return self._fehler(500, f"{type(e).__name__}: {e}")
         return self._fehler(404, "nicht gefunden")
+
+    def _historie_dateien(self) -> set[str]:
+        st = lade_status()
+        return {p for e in historie(st, Path(st.get("ordner") or STANDARD_ORDNER), HISTORIE_MAX)
+                for p in (e["docx"], e["pdf"]) if p}
 
     def _start(self):
         st = lade_status()
@@ -308,6 +352,11 @@ class Handler(BaseHTTPRequestHandler):
         st = lade_status()
         st.update({"ordner": str(ordner), "letzte_nummer": hoehere_nummer(st.get("letzte_nummer"), nr),
                    "pdf": bool(d.get("pdf"))})
+        merke_in_historie(st, {
+            "nummer": nr, "kunde": a.kunde, "brutto": ra.fmt_betrag(r.brutto),
+            "rechnungsdatum": r.datum.isoformat(), "ab_nr": a.ab_nr, "projekt": a.projekt,
+            "erstellt": dt.datetime.now().isoformat(timespec="seconds"), "docx": str(erg.docx),
+        })
         speichere_status(st)
         return self._antwort(200, {
             "docx": str(erg.docx),

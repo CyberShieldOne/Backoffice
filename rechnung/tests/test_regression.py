@@ -241,6 +241,40 @@ class Server(unittest.TestCase):
         st, _ = self.post("/api/oeffnen", {"pfad": "/etc/passwd"})
         self.assertEqual(st, 403)
 
+    def test_historie(self):  # Wunsch: Historie der letzten Rechnungen
+        a_pdf, _ = ab_pdf(self.t, "a.pdf", seed=1)
+        st, d = self.lesen(a_pdf)
+        self.assertEqual(self.erstellen(d["id"], "2026-0001")[0], 200)
+        time.sleep(1.1)  # Sekundenauflösung des Zeitstempels
+        st, e2 = self.erstellen(d["id"], "2026-0002")
+        self.assertEqual(st, 200)
+        # per Kommandozeile erstellte Rechnung im Ordner (ohne gemerkten Eintrag)
+        fremd = self.ordner / "2025-0900_Rechnung_Alt_GmbH.docx"
+        fremd.write_bytes(b"x")
+        os_zeit = time.time() - 86400
+        import os
+        os.utime(fremd, (os_zeit, os_zeit))
+        st, h = self.post("/api/historie", {})
+        nummern = [e["nummer"] for e in h["eintraege"]]
+        self.assertEqual(nummern, ["2026-0002", "2026-0001", "2025-0900"])
+        self.assertEqual(h["eintraege"][0]["brutto"], e2["brutto"])
+        self.assertEqual(h["eintraege"][2]["kunde"], "Alt GmbH")
+        # Rechnungen aus der Historie dürfen auch in einer neuen Sitzung geöffnet werden
+        self.zustand.erstellt.clear()
+        with mock.patch.object(app, "oeffne") as geoeffnet:
+            self.assertEqual(self.post("/api/oeffnen", {"pfad": h["eintraege"][1]["docx"]})[0], 200)
+            self.assertEqual(self.post("/api/oeffnen", {"pfad": str(fremd)})[0], 200)
+            self.assertEqual(self.post("/api/oeffnen", {"pfad": str(a_pdf)})[0], 403)
+            self.assertEqual(geoeffnet.call_count, 2)
+        # gelöschte Rechnung verschwindet aus der Historie
+        Path(h["eintraege"][1]["docx"]).unlink()
+        st, h = self.post("/api/historie", {})
+        self.assertEqual([e["nummer"] for e in h["eintraege"]], ["2026-0002", "2025-0900"])
+        # Überschreiben derselben Rechnung: ein Eintrag, nicht zwei
+        self.assertEqual(self.erstellen(d["id"], "2026-0002", ueberschreiben=True)[0], 200)
+        st, h = self.post("/api/historie", {})
+        self.assertEqual([e["nummer"] for e in h["eintraege"]].count("2026-0002"), 1)
+
     def test_hochgeladene_pdfs_werden_geloescht(self):  # Fund 11
         tmp = self.zustand.tmp
         a_pdf, _ = ab_pdf(self.t, "a.pdf", seed=1)
