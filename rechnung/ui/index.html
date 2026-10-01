@@ -471,10 +471,11 @@ function zeigeHistorie() {
 }
 
 async function ladeHistorie() {
-  const {status, daten} = await api("/api/historie");
+  const {status, daten} = await api("/api/historie", {ordner: $("f-ordner").value});
   if (status === 200) { historieDaten = daten.eintraege; zeigeHistorie(); }
 }
 $("h-suche").oninput = zeigeHistorie;
+$("f-ordner").onchange = ladeHistorie;   // anderer Ablageordner → dessen Rechnungen in der Historie
 
 start();
 ladeHistorie();

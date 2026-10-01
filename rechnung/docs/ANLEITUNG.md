@@ -90,9 +90,13 @@ Dateiname: `<Rechnungsnummer>_Rechnung_<Kunde>.docx`, z. B. `2026-0142_Rechnung_
 
 ## 3. Letzte Rechnungen
 
-Unten in der App: die zuletzt erstellten Rechnungen und alle Rechnungen im Ablageordner, neueste zuerst.
-Suche nach Nummer, Kunde, Projekt oder Betrag. Je Zeile: *Word*, *PDF*, *Finder*.
+Unten in der App: die zuletzt erstellten Rechnungen und alle Rechnungen in den bisher benutzten Ablageordnern,
+neueste zuerst. Suche nach Nummer, Kunde, Projekt oder Betrag. Je Zeile: *Word*, *PDF*, *Finder*.
 Im Finder gelöschte Rechnungen verschwinden aus der Liste.
+
+**Rechnungen fehlen in der Liste?** Im Feld *Ablageordner* den Ordner eintragen, in dem sie liegen, und das Feld
+verlassen (Tab) – die Rechnungen dort erscheinen sofort. Nach der nächsten erstellten Rechnung merkt sich die App
+den Ordner dauerhaft. Rechnungen, die so zurückkommen, zeigen keinen Bruttobetrag (der steht nur im Dokument).
 
 ---
 

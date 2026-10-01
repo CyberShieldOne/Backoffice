@@ -54,6 +54,17 @@ const path = require('path');
   const treffer = await p.locator('#historie-liste tbody tr').allTextContents();
   pruefe(treffer.length >= 1 && treffer.every(t => t.includes('OHB')), 'Suche findet nur passende Kunden');
   await p.fill('#h-suche', '');
+  // Historie verloren: Ordner mit alten Rechnungen ins Feld eintragen → erscheinen sofort
+  const altOrdner = path.join(arbeit, 'alte_rechnungen');
+  fs.mkdirSync(altOrdner, { recursive: true });
+  fs.writeFileSync(path.join(altOrdner, '2025-0001_Rechnung_Alt_GmbH.docx'), 'x');
+  const ablageVorher = await p.inputValue('#f-ordner');
+  await p.fill('#f-ordner', altOrdner);
+  await p.dispatchEvent('#f-ordner', 'change');
+  await p.waitForFunction(() => document.getElementById('historie-liste').textContent.includes('2025-0001'));
+  pruefe((await p.textContent('#historie-liste')).includes('Alt GmbH'), 'Historie: Rechnungen aus eingetragenem Ordner');
+  pruefe((await p.textContent('#historie-liste')).includes('2026-0500'), 'Historie: bisherige Einträge bleiben');
+  await p.fill('#f-ordner', ablageVorher);
   await p.screenshot({ path: path.join(arbeit, 'ui_historie.png'), fullPage: true });
 
   // Fund 2: neue AB → USt-ID/Angebot geleert

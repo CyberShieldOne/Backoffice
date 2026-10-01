@@ -1,6 +1,6 @@
 # CS Rechnung – Technische Dokumentation
 
-Stand: Version 1.10 (Branch `claude/invoice-template-script-1snhqe`).
+Stand: Version 1.11 (Branch `claude/invoice-template-script-1snhqe`).
 
 ## 1. Überblick
 
@@ -43,6 +43,8 @@ Stand: Version 1.10 (Branch `claude/invoice-template-script-1snhqe`).
 | `/Applications/CS Rechnung.app` | Programm (Startprogramm, Python-Code, Vorlage, Oberfläche) | bis zum nächsten Update |
 | `~/Library/Application Support/CS-Rechnung/venv/` | eigene Python-Umgebung mit `pdfplumber` | wird neu gebaut, wenn sich `requirements-app.txt` ändert |
 | `~/Library/Application Support/CS-Rechnung/einstellungen.json` | Einstellungen, Nummernstand, Historie (s. u.) | dauerhaft |
+| `…/CS-Rechnung/einstellungen.bak.json` | voriger guter Stand (bei jedem Speichern erneuert) | dauerhaft |
+| `…/CS-Rechnung/einstellungen.defekt-<Zeit>.json` | unlesbare Einstellungsdatei, aufgehoben statt überschrieben | bis zum Löschen |
 | `~/Library/Application Support/CS-Rechnung/app.log` | Startprotokoll, Fehlermeldungen | wächst; kann gelöscht werden |
 | `~/Documents/Rechnungen/` (änderbar) | erzeugte Rechnungen `*.docx` / `*.pdf` | dauerhaft (Ablage des Anwenders) |
 | `$TMPDIR/cs-rechnung-XXXX/` | hochgeladene Belege (die letzten 5, für mehrere Tabs) | ältere sofort, unlesbare sofort, alle beim Beenden gelöscht |
@@ -52,10 +54,20 @@ Stand: Version 1.10 (Branch `claude/invoice-template-script-1snhqe`).
 | Schlüssel | Bedeutung |
 |---|---|
 | `ordner` | zuletzt verwendeter Ablageordner |
+| `ordner_alle` | alle benutzten Ablageordner (bis 20) – die Historie durchsucht sie alle |
 | `letzte_nummer` | höchste eigene Rechnungsnummer (bewegt sich nur vorwärts; SAP-Nummern zählen nicht) |
 | `pdf` | Häkchen „zusätzlich PDF“ |
 | `historie` | bis zu 200 Einträge: Nummer, Kunde, Brutto, Rechnungsdatum, AB-Nr./Quelle, Projekt, Zeitpunkt, DOCX-Pfad |
 | `laufend` | URL der laufenden Instanz inkl. Zugriffstoken (wird beim Beenden entfernt) |
+
+Schreiben ist atomar (Temp-Datei + `os.replace`); ein gleichzeitiger Leser sieht nie eine halbe Datei. Ist die
+Datei trotzdem unlesbar, gilt `einstellungen.bak.json`. Bis Version 1.10 wurde direkt geschrieben: beim Update las
+die neue Instanz u. U. die Datei, während die alte beim Beenden speicherte, bekam einen leeren Stand und speicherte
+ihn – Historie, Nummernstand und Ablageordner waren weg (nachgestellt in `tests/test_historie.py`).
+
+**Historie** = gemerkte Einträge (DOCX existiert noch) + alle `*_Rechnung_*.docx` in: aktuellem Ablageordner,
+dem im Formular eingetragenen Ordner, `ordner_alle`, den Ordnern der gemerkten Einträge und `~/Documents/Rechnungen`.
+Für Dateien ohne Eintrag kommen Nummer und Kunde aus den Dokumenteigenschaften (`dc:identifier`), Brutto bleibt leer.
 
 Unter Linux (Entwicklung/Tests) liegt die Datei unter `$XDG_CONFIG_HOME/cs-rechnung/` bzw. `~/.config/cs-rechnung/`.
 
@@ -260,7 +272,7 @@ Wird ohne PDF überschrieben, wird das veraltete PDF entfernt.
 
 ```bash
 cd rechnung
-./macos/build_app.sh 1.10       # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
+./macos/build_app.sh 1.11       # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
 ```
 
 Das Bundle enthält `rechnung_aus_ab.py`, `quelle_ariba.py`, `woerterbuch.py`, `woerterbuch.json`, `app.py`, `ui/index.html`, die Vorlage und
@@ -284,7 +296,7 @@ die Abschlussprüfung meldet vergessene Platzhalter.
 cd rechnung
 pip install -r requirements.txt
 python tests/test_rechnung.py --iterationen 10 --je 6 [--echt AB.pdf] [--pdf]   # synthetische ABs, 10 Iterationen
-python -m unittest tests/test_regression.py tests/test_ariba.py tests/test_review2.py tests/test_woerterbuch.py
+python -m unittest tests/test_regression.py tests/test_ariba.py tests/test_review2.py tests/test_woerterbuch.py tests/test_historie.py
 # Regressionen, SAP, 2. Review, Wörterbuch (Belege mit Synonym-Beschriftungen, Ergänzung ohne Codeänderung)
 python app.py --kein-browser   # in zweitem Terminal, dann:
 node tests/ui_test.js <URL> <AB-A.pdf> <AB-B.pdf> <Ordner> [SAP.pdf]          # Oberfläche (Playwright)
