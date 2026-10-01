@@ -545,8 +545,13 @@ def pruefe_platzhalter(dateien: dict[str, bytes]) -> list[str]:
     return funde
 
 
+def finde_soffice() -> str | None:
+    mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    return shutil.which("soffice") or shutil.which("libreoffice") or (mac if Path(mac).exists() else None)
+
+
 def nach_pdf(docx: Path) -> Path:
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    soffice = finde_soffice()
     if not soffice:
         raise RuntimeError("LibreOffice (soffice) nicht gefunden – PDF-Export nicht möglich")
     subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir",
