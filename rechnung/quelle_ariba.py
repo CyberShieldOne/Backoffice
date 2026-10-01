@@ -65,10 +65,8 @@ def _beschreibung_teilen(text: str) -> tuple[str, str]:
     return teile[0], " · ".join(teile[1:])
 
 
-def lese_ariba(pdf_pfad) -> ra.Auftrag:
-    import pdfplumber
-
-    with pdfplumber.open(str(pdf_pfad)) as pdf:
+def lese_ariba(pdf_pfad, pdf=None) -> ra.Auftrag:
+    with ra.oeffne_pdf(pdf_pfad, pdf) as pdf:
         words, y_off = [], 0.0
         for seite in pdf.pages:   # alle Seiten untereinander (Positionen können umbrechen)
             for w in seite.extract_words():

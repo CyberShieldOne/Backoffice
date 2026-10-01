@@ -1,6 +1,6 @@
 # CS Rechnung – Technische Dokumentation
 
-Stand: Version 1.6 (Branch `claude/invoice-template-script-1snhqe`).
+Stand: Version 1.8 (Branch `claude/invoice-template-script-1snhqe`).
 
 ## 1. Überblick
 
@@ -43,7 +43,7 @@ Stand: Version 1.6 (Branch `claude/invoice-template-script-1snhqe`).
 | `~/Library/Application Support/CS-Rechnung/einstellungen.json` | Einstellungen, Nummernstand, Historie (s. u.) | dauerhaft |
 | `~/Library/Application Support/CS-Rechnung/app.log` | Startprotokoll, Fehlermeldungen | wächst; kann gelöscht werden |
 | `~/Documents/Rechnungen/` (änderbar) | erzeugte Rechnungen `*.docx` / `*.pdf` | dauerhaft (Ablage des Anwenders) |
-| `$TMPDIR/cs-rechnung-XXXX/` | hochgeladener Beleg (nur der aktuelle) | gelöscht bei neuem Beleg, bei Lesefehler und beim Beenden |
+| `$TMPDIR/cs-rechnung-XXXX/` | hochgeladene Belege (die letzten 5, für mehrere Tabs) | ältere sofort, unlesbare sofort, alle beim Beenden gelöscht |
 
 `einstellungen.json`:
 
@@ -105,7 +105,8 @@ Ergebnis ist ein `Auftrag`-Objekt.
 **CS-Auftragsbestätigung (`lese_ab`)**
 - Kopfblock rechts: `Datum`, `Kunde`, `Anschrift` (→ Straße / PLZ Ort), `Kunden-Nr.`, `Kundenkontakt`,
   `Rechnungsempf`, `Projekt` (Folgezeilen werden angehängt).
-- Titel `Auftragsbestätigung <Nr>`, `Ihre Bestellung <Nr> … vom <Datum>`, `Liefertermin` (unlesbar → Hinweis), `Zahlungsziel: N Tage`.
+- Titel `Auftragsbestätigung <Nr>`, `Ihre Bestellung [Nr.] <Nr> … [vom <Datum>]` (Nummer = erstes Wort mit Ziffer, Datum
+  optional), `Liefertermin` (unlesbar oder ungültig → Hinweis), `Zahlungsziel: N Tage`.
 - Produkttabelle über die Spaltenköpfe `Produkte / Einheit / Menge / Summe`; `Leistungsbeschreibung:` bis `Summe Auftrag`.
 - Fußzeile (unterste 8 % jeder Seite) wird ignoriert; mehrseitige ABs werden zusammengesetzt.
 
@@ -118,7 +119,7 @@ Ergebnis ist ein `Auftrag`-Objekt.
 
 **Prüfungen beim Lesen:** Pflichtfelder vorhanden; Summe der Positionen = Auftrags- bzw. Nettosumme; bei SAP zusätzlich
 Steuersatz = 19 % und Netto + Steuer = fälliger Betrag. Beträge werden mit und ohne Tausenderpunkt gelesen
-(`4.500,-`, `4500,00 €`, `EUR 12.345,67`).
+(`4.500,-`, `4500,00 €`, `EUR 12.345,67`, `4 500,00 €`).
 
 ### 4.4 Rechnung erzeugen (`erstelle_rechnung` → `fuelle_vorlage`)
 
@@ -129,7 +130,7 @@ Standardwerte, wenn nichts angegeben ist (CLI und App):
 | Rechnungsnummer | Pflichtangabe | aus dem Beleg |
 | Rechnungsdatum | heute | aus dem Beleg |
 | Leistungszeitraum | Bestelldatum (sonst AB-Datum) → Liefertermin (sonst Rechnungsdatum) | Service-Start → -Ende |
-| Übergabe Bericht/Roadmap | Leistungsende | keine (Satz entfällt) |
+| Übergabe Bericht/Roadmap | Leistungsende | keine (Satz entfällt) – außer mit `--uebergabe` |
 | USt-IdNr. Empfänger | „—“ | aus dem Beleg |
 | Fälligkeit | Rechnungsdatum + Zahlungsziel | ebenso |
 | USt | 19 % (`UST_SATZ`), kaufmännisch gerundet | ebenso |
@@ -145,7 +146,14 @@ Die `.dotx` ist eine ZIP-Datei; bearbeitet werden `word/document.xml` und `word/
   entfallen die Sätze zu Bericht/Roadmap; ohne AB wird „gemäß Ihrer Bestellung …“ verwendet; bei SAP wird der Hinweis
   auf die Übermittlung über SAP Ariba eingefügt.
 - Content-Type `template` → `document` (aus `.dotx` wird `.docx`).
-- **Abschlussprüfung:** Steht danach noch irgendwo ein `[…]`-Platzhalter, wird **keine** Datei geschrieben (Fehler).
+- **Eingesetzte Werte geschützt:** Eckige Klammern in eingesetzten Daten (Kunde `ACME [K-1042]`, Projekt
+  `Pentest [Phase 2]`) werden bis zum Schluss maskiert; spätere Regeln greifen nicht auf eingesetzte Daten zu.
+- **Abschlussprüfung:** Steht danach noch irgendwo ein `[…]`-Platzhalter der Vorlage, wird **keine** Datei geschrieben (Fehler).
+- **Atomar schreiben:** erst Temp-Datei im Zielordner, dann ersetzen – eine vorhandene Rechnung bleibt bei Schreibfehlern erhalten.
+- **Beleg nie anfassen:** Heißt das PDF-Ziel wie der Beleg selbst (z. B. `RE-….pdf` → `RE-….docx`), wird kein PDF erzeugt
+  und der Beleg nicht gelöscht; ein PDF neben der Rechnung wird nur entfernt/ersetzt, wenn es zur eigenen Vorfassung gehört.
+- Rechnungsnummer wird im Kern geprüft (erlaubt: Buchstaben, Ziffern, Leerzeichen, `. _ / # + -`) und steht mit dem Kunden
+  in `docProps/core.xml` (`dc:identifier`).
 
 Platzhalter der Vorlage:
 
@@ -181,11 +189,16 @@ Wird ohne PDF überschrieben, wird das veraltete PDF entfernt.
   ermittelt aus `letzte_nummer` **und** den Dateinamen im Ablageordner, + 1; enthält das Präfix ein anderes Jahr als heute,
   beginnt die Zählung im aktuellen Jahr bei 1.
 - `letzte_nummer` bewegt sich nur vorwärts (Korrektur einer alten Rechnung setzt den Vorschlag nicht zurück).
-- Dubletten: gleiche Nummer für anderen Kunden im Ablageordner → abgelehnt; gleiche Datei → Rückfrage.
+- Dubletten: gleiche Nummer für anderen Kunden im Ablageordner → abgelehnt; gleiche Datei → Rückfrage. Gezählt werden
+  `.docx` **und** `.pdf` (eine versendete Rechnung, von der nur noch das PDF existiert, bleibt vergeben).
+- `letzte_nummer` vergleicht Schema ohne Jahr, dann (Jahr, Nummer): die Korrektur einer Vorjahresrechnung setzt den
+  Vorschlag nicht zurück.
 - Dateinamen sind verlustbehaftet (`Acme & Partner` und `Acme Partner`, `RE 2026/77` und `RE_2026_77` ergeben denselben
   Namen). Jede erzeugte Rechnung trägt deshalb in den Dokumenteigenschaften (`docProps/core.xml`, `dc:identifier`)
   Rechnungsnummer und Kunde im Original. Gehört eine vorhandene Datei gleichen Namens zu einer anderen Rechnung,
-  wird nicht überschrieben – auch nicht nach Bestätigung.
+  wird nicht überschrieben – auch nicht nach Bestätigung. Diese Prüfung sitzt im Kern (`erstelle_rechnung`,
+  `DateiExistiert`) und gilt damit auch für die Kommandozeile (dort: Abbruch, Ersetzen derselben Rechnung nur mit
+  `--ueberschreiben`).
 
 ## 6. Sicherheit
 
@@ -199,7 +212,7 @@ Wird ohne PDF überschrieben, wird das veraltete PDF entfernt.
 
 ```bash
 cd rechnung
-./macos/build_app.sh 1.6        # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
+./macos/build_app.sh 1.8        # → dist/CS Rechnung.app, dist/CS-Rechnung-mac.zip
 ```
 
 Das Bundle enthält `rechnung_aus_ab.py`, `quelle_ariba.py`, `app.py`, `ui/index.html`, die Vorlage und
@@ -222,7 +235,7 @@ die Abschlussprüfung meldet vergessene Platzhalter.
 cd rechnung
 pip install -r requirements.txt
 python tests/test_rechnung.py --iterationen 10 --je 6 [--echt AB.pdf] [--pdf]   # synthetische ABs, 10 Iterationen
-python -m unittest tests/test_regression.py tests/test_ariba.py                 # Regressionen, SAP (10 × 5 Belege)
+python -m unittest tests/test_regression.py tests/test_ariba.py tests/test_review2.py  # Regressionen, SAP, 2. Review
 python app.py --kein-browser   # in zweitem Terminal, dann:
 node tests/ui_test.js <URL> <AB-A.pdf> <AB-B.pdf> <Ordner> [SAP.pdf]          # Oberfläche (Playwright)
 ```

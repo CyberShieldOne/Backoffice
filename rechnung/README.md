@@ -36,6 +36,7 @@ oder nach dem Füllen noch ein `[…]`-Platzhalter im Dokument steht.
 Tests:
 - `python tests/test_rechnung.py --iterationen 10 --je 6 --echt AB.pdf --pdf` – synthetische ABs (Zufallsvarianten)
 - `python -m unittest tests/test_regression.py` – Regressionstests zu den Review-Funden und zur Bestellnummer
+- `python -m unittest tests/test_review2.py` – Regressionstests zum zweiten xhigh-Review
 - `python -m unittest tests/test_ariba.py` – synthetische SAP-Ariba-Rechnungen (10 Iterationen × 5)
 - `node tests/ui_test.js <URL> <AB-A.pdf> <AB-B.pdf> <Ordner> [SAP.pdf]` – Oberfläche (Playwright), App vorher mit `python app.py --kein-browser` starten
 

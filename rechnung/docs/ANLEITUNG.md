@@ -108,7 +108,8 @@ python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
 ```
 
 Weitere Optionen: `--von`, `--bis`, `--uebergabe`, `--ohne-uebergabe`, `--ust-id`, `--angebot`, `--bestellnr`,
-`--bestelldatum`, `-o <Ziel.docx>`. Bei SAP-Rechnungen ist `--rechnungsnr` nicht nötig.
+`--bestelldatum`, `-o <Ziel.docx>`, `--ueberschreiben` (vorhandene Fassung derselben Rechnung ersetzen).
+Bei SAP-Rechnungen ist `--rechnungsnr` nicht nötig. Eine Datei, die zu einer anderen Rechnung gehört, wird nie überschrieben.
 
 ---
 

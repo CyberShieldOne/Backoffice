@@ -17,14 +17,20 @@ import argparse
 import datetime as dt
 import html
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+
+# Als Skript gestartet heißt das Modul "__main__"; quelle_ariba importiert "rechnung_aus_ab" –
+# ohne diese Zeile gäbe es zwei Modulkopien und zwei verschiedene AbFehler-Klassen.
+sys.modules.setdefault("rechnung_aus_ab", sys.modules[__name__])
 
 VORLAGE = Path(__file__).resolve().parent / "vorlagen" / "2026-OKT_CS-Rechnung_Vorlage.dotx"
 UST_SATZ = Decimal("19")
@@ -50,11 +56,26 @@ class AbFehler(Exception):
     """Pflichtangabe in der Auftragsbestätigung nicht gefunden/inkonsistent."""
 
 
+class DateiExistiert(AbFehler):
+    """Zieldatei existiert. fremd=True: sie gehört zu einer anderen Rechnung (nie überschreiben)."""
+
+    def __init__(self, text: str, fremd: bool):
+        super().__init__(text)
+        self.fremd = fremd
+
+
 # --------------------------------------------------------------------------
 # Hilfsfunktionen Datum / Betrag
 # --------------------------------------------------------------------------
 
 def parse_datum(text: str) -> dt.date:
+    try:
+        return _parse_datum(text)
+    except ValueError:  # z. B. 31.09.2026
+        raise AbFehler(f"Kein gültiges Datum: {text.strip()!r}")
+
+
+def _parse_datum(text: str) -> dt.date:
     t = text.strip()
     m = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})\b", t)
     if m:
@@ -69,7 +90,9 @@ def parse_datum(text: str) -> dt.date:
 
 
 def parse_betrag(text: str) -> Decimal:
-    """'EUR 4.500,-' / '4500,00 €' / 'EUR 12.345,67' -> Decimal."""
+    """'EUR 4.500,-' / '4500,00 €' / 'EUR 12.345,67' / '4 500,00 €' -> Decimal."""
+    # Leerzeichen als Tausendertrenner (DIN 5008, auch U+00A0/U+202F/U+2009) entfernen
+    text = re.sub(r"(?<=\d)[ \u00a0\u202f\u2009](?=\d{3}(?!\d))", "", text)
     # mit Tausenderpunkten (mind. eine Gruppe) ODER ganz ohne – nie nach 3 Ziffern abschneiden
     m = re.search(r"(\d{1,3}(?:\.\d{3})+(?!\d)|\d+)(?:,(\d{1,2}|-{1,2}|–))?", text)
     if not m:
@@ -192,10 +215,16 @@ def _kopf_felder(words, x_rechts: float, y_bis: float) -> dict[str, str]:
     return felder
 
 
-def lese_ab(pdf_pfad: Path) -> Auftrag:
-    import pdfplumber
+def oeffne_pdf(pdf_pfad, pdf=None):
+    """Bereits geöffnetes PDF weiterverwenden (nicht schließen) oder Datei öffnen."""
+    import contextlib
 
-    with pdfplumber.open(str(pdf_pfad)) as pdf:
+    import pdfplumber
+    return contextlib.nullcontext(pdf) if pdf is not None else pdfplumber.open(str(pdf_pfad))
+
+
+def lese_ab(pdf_pfad: Path, pdf=None) -> Auftrag:
+    with oeffne_pdf(pdf_pfad, pdf) as pdf:
         words = []
         volltext = []
         y_off = 0.0
@@ -236,12 +265,9 @@ def lese_ab(pdf_pfad: Path) -> Auftrag:
     strasse, plz_ort = m.group(1).rstrip(", "), m.group(2).strip()
 
     # --- Bestellung / Liefertermin / Zahlungsziel / Summe ----------------
-    bestell_nr, bestell_datum = "", None
-    m = re.search(r"Ihre Bestellung\s+(?:Nr\.?\s*)?(\S+).*?vom:?\s*([0-9]{1,2}\.[^\n]*?\d{4})", text)
-    if m:
-        bestell_nr, bestell_datum = m.group(1), parse_datum(m.group(2))
-    liefertermin = None
     lese_hinweise: list[Hinweis] = []
+    bestell_nr, bestell_datum = lies_bestellung(text, lese_hinweise)
+    liefertermin = None
     m = re.search(r"Liefertermin:?\s*([^\n]+)", text)
     if m:
         try:
@@ -285,19 +311,37 @@ def lese_ab(pdf_pfad: Path) -> Auftrag:
     )
 
 
+def lies_bestellung(text: str, hinweise: list[Hinweis]) -> tuple[str, dt.date | None]:
+    """Zeile 'Ihre Bestellung [Nr.] <Nummer> … [vom <Datum>]' → (Nummer, Datum).
+    Nummer = erstes Wort mit einer Ziffer vor 'vom' (nicht 'per', 'Nr.', 'Email' …); Datum optional."""
+    m = re.search(r"Ihre Bestellung\b([^\n]*)", text)
+    if not m:
+        return "", None
+    teile = re.split(r"\bvom\b", m.group(1), maxsplit=1)
+    vor, nach = teile[0], (teile[1] if len(teile) > 1 else "")
+    nr = re.search(r"(?<![\w.])([A-Za-z0-9][\w./-]*\d[\w./-]*)", vor)
+    datum = None
+    if nach.strip(" :"):
+        try:
+            datum = parse_datum(nach)
+        except AbFehler:
+            hinweise.append(Hinweis(f"Bestelldatum '{nach.strip(' :')}' nicht lesbar – bitte selbst angeben",
+                                    "--bestelldatum"))
+    return (nr.group(1).rstrip(".,;:") if nr else ""), datum
+
+
 def lese_beleg(pdf_pfad: Path) -> Auftrag:
     """Belegart erkennen: CS-Auftragsbestätigung oder SAP-Ariba-Rechnung."""
-    import pdfplumber
     import quelle_ariba
 
-    with pdfplumber.open(str(pdf_pfad)) as pdf:
+    with oeffne_pdf(pdf_pfad) as pdf:   # einmal öffnen, für Erkennung und Lesen
         erste = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
-    if quelle_ariba.ist_ariba(erste):
-        return quelle_ariba.lese_ariba(pdf_pfad)
-    if "Auftragsbest" not in erste:
-        raise AbFehler("Unbekannter Beleg – erwartet wird eine CS-Auftragsbestätigung "
-                       "oder eine SAP-Ariba-Rechnung (Standardrechnung)")
-    return lese_ab(pdf_pfad)
+        if quelle_ariba.ist_ariba(erste):
+            return quelle_ariba.lese_ariba(pdf_pfad, pdf)
+        if "Auftragsbest" not in erste:
+            raise AbFehler("Unbekannter Beleg – erwartet wird eine CS-Auftragsbestätigung "
+                           "oder eine SAP-Ariba-Rechnung (Standardrechnung)")
+        return lese_ab(pdf_pfad, pdf)
 
 
 def _lese_positionen(words, zeilen, zeilen_txt) -> list[Position]:
@@ -379,6 +423,12 @@ def _lese_positionen(words, zeilen, zeilen_txt) -> list[Position]:
 # DOCX-Platzhalter ersetzen (run-übergreifend)
 # --------------------------------------------------------------------------
 
+# Eckige Klammern in eingesetzten Werten (Kunde "ACME [K-1042]", Projekt "Pentest [Phase 2]") werden bis
+# zum Schluss durch Zeichen aus dem privaten Unicode-Bereich ersetzt: So greift keine spätere Regel auf
+# eingesetzte Daten zu und die Platzhalterprüfung meldet nur echte Vorlagenreste.
+MASKE = str.maketrans({"[": "\ue000", "]": "\ue001"})
+DEMASKE = str.maketrans({"\ue000": "[", "\ue001": "]"})
+
 P_RX = re.compile(r"<w:p(?:\s[^>]*?)?(?<!/)>.*?</w:p>", re.S)
 T_RX = re.compile(r"<w:t(\s[^>]*)?>([^<]*)</w:t>")
 TR_RX = re.compile(r"<w:tr(?:\s[^>]*?)?(?<!/)>.*?</w:tr>", re.S)
@@ -402,7 +452,8 @@ def _ersetze_im_absatz(p_xml: str, regeln) -> str:
             if not m:
                 break
             a, b = (m.span("ph") if "ph" in rx.groupindex else m.span())
-            neu_txt = ersatz(m) if callable(ersatz) else ersatz
+            # eingesetzte Werte maskieren: Klammern darin sind Daten, keine Platzhalter (s. MASKE)
+            neu_txt = (ersatz(m) if callable(ersatz) else ersatz).translate(MASKE)
             start = a + len(neu_txt) + (1 if a == b else 0)
             if gesamt[a:b] == neu_txt:
                 continue
@@ -514,7 +565,7 @@ def _positionszeilen(xml: str, r: Rechnung) -> str:
             (_r(r"^19 %$"), f"{UST_SATZ} %"),
             (_r(r"^\[0,00 €\]$"), fmt_betrag(p.betrag)),
         ]
-        zeilen.append(ersetze(vorlage_tr.group(0), regeln))
+        zeilen.append(re.sub(r' w14:(?:paraId|textId)="[0-9A-Fa-f]+"', "", ersetze(vorlage_tr.group(0), regeln)))
     return xml[:vorlage_tr.start()] + "".join(zeilen) + xml[vorlage_tr.end():]
 
 
@@ -645,11 +696,22 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
     rest = pruefe_platzhalter(dateien)
     if rest:
         raise RuntimeError("Nicht ersetzte Platzhalter: " + "; ".join(rest))
+    for name in dateien:
+        if re.match(r"word/.*\.xml$", name):
+            dateien[name] = dateien[name].decode("utf-8").translate(DEMASKE).encode("utf-8")
 
+    # Atomar schreiben: erst Temp-Datei im Zielordner, dann ersetzen – eine vorhandene Rechnung
+    # bleibt erhalten, wenn das Schreiben scheitert (Platte voll, Netzlaufwerk).
     ziel.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(ziel, "w", zipfile.ZIP_DEFLATED) as zout:
-        for name, daten in dateien.items():
-            zout.writestr(infos[name], daten, compress_type=zipfile.ZIP_DEFLATED)
+    fd, tmp = tempfile.mkstemp(prefix=".~", suffix=".docx", dir=str(ziel.parent))
+    try:
+        with os.fdopen(fd, "wb") as f, zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED) as zout:
+            for name, daten in dateien.items():
+                zout.writestr(infos[name], daten, compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(tmp, ziel)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def _kenndaten(core: str, r: "Rechnung") -> str:
@@ -657,7 +719,7 @@ def _kenndaten(core: str, r: "Rechnung") -> str:
     Original (Dateinamen sind verlustbehaftet: 'Acme & Partner' und 'Acme Partner' ergeben denselben)."""
     ident = html.escape(json.dumps({"rechnungsnr": r.nr, "kunde": r.auftrag.kunde}, ensure_ascii=False), quote=False)
     titel = html.escape(f"Rechnung {r.nr}", quote=False)
-    core = re.sub(r"<dc:title>.*?</dc:title>", f"<dc:title>{titel}</dc:title>", core, flags=re.S)
+    core = re.sub(r"<dc:title>.*?</dc:title>", lambda m: f"<dc:title>{titel}</dc:title>", core, flags=re.S)
     core = re.sub(r"<dc:(subject|identifier)>.*?</dc:\1>", "", core, flags=re.S)
     zusatz = (f"<dc:subject>{html.escape(r.auftrag.kunde, quote=False)}</dc:subject>"
               f"<dc:identifier>{ident}</dc:identifier>")
@@ -725,6 +787,19 @@ def _dateiname(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9ÄÖÜäöüß_-]+", "_", s).strip("_")
 
 
+NR_ERLAUBT = re.compile(r"[A-Za-z0-9ÄÖÜäöü][A-Za-z0-9ÄÖÜäöü ._/#+-]{0,39}")
+
+
+def pruefe_rechnungsnr(nr: str) -> str:
+    nr = (nr or "").strip()
+    if not nr:
+        raise AbFehler("Rechnungsnummer fehlt (--rechnungsnr)")
+    if not NR_ERLAUBT.fullmatch(nr):
+        raise AbFehler(f"Rechnungsnummer '{nr}' enthält Zeichen, die nicht erlaubt sind. "
+                       "Erlaubt: Buchstaben, Ziffern, Leerzeichen und . _ / # + -")
+    return nr
+
+
 def rechnungs_dateiname(rechnungsnr: str, kunde: str) -> str:
     return f"{_dateiname(rechnungsnr)}_Rechnung_{_dateiname(kunde)}.docx"
 
@@ -743,22 +818,20 @@ def erstelle_rechnung(ab_pdf: Path, rechnungsnr: str | None = None, datum: dt.da
                       ausgabe: Path | None = None, vorlage: Path = VORLAGE,
                       pdf: bool = False, auftrag: Auftrag | None = None,
                       bestell_nr: str | None = None, bestell_datum: dt.date | None = None,
-                      mit_uebergabe: bool | None = None) -> Ergebnis:
+                      mit_uebergabe: bool | None = None, ueberschreiben: bool = False) -> Ergebnis:
     """Erzeugt die Rechnung. Ein bereits gelesener Auftrag kann übergeben werden.
     None bedeutet jeweils: Wert aus dem Beleg bzw. Standard. Scheitert nur der PDF-Export,
     ist das DOCX trotzdem fertig (Hinweis statt Ausnahme)."""
     a = auftrag or lese_beleg(ab_pdf)
     hinweise = list(a.hinweise)
-    rechnungsnr = (rechnungsnr or a.rechnungsnr or "").strip()
-    if not rechnungsnr:
-        raise AbFehler("Rechnungsnummer fehlt (--rechnungsnr)")
+    rechnungsnr = pruefe_rechnungsnr(rechnungsnr or a.rechnungsnr)
     datum = datum or a.rechnungsdatum or dt.date.today()
     bis = bis or a.leistung_bis
     von = von or a.leistung_von
     if ust_id is None:
         ust_id = a.ust_id_kunde
-    if mit_uebergabe is None:
-        mit_uebergabe = a.quelle == "Auftragsbestätigung"  # Bericht/Roadmap gibt es nur bei Projekten aus der AB
+    if mit_uebergabe is None:  # Bericht/Roadmap standardmäßig nur bei Projekten aus der AB – oder wenn ein Datum angegeben ist
+        mit_uebergabe = a.quelle == "Auftragsbestätigung" or uebergabe is not None
     if bis is None:
         bis = a.liefertermin or datum
         hinweise.append(Hinweis(f"Leistungszeitraum-Ende = {'Liefertermin' if a.liefertermin else 'Rechnungsdatum'} "
@@ -791,17 +864,32 @@ def erstelle_rechnung(ab_pdf: Path, rechnungsnr: str | None = None, datum: dt.da
                  bestell_nr=bestell_nr, bestell_datum=bestell_datum)
     if ausgabe is None:
         ausgabe = ab_pdf.parent / rechnungs_dateiname(rechnungsnr, a.kunde)
-    altes_pdf = ausgabe.with_suffix(".pdf")
+    pdf_ziel = ausgabe.with_suffix(".pdf")
+    # Das PDF-Ziel kann der Beleg selbst sein (z. B. RE-2026-09-30-05.pdf → RE-2026-09-30-05.docx): nie anfassen
+    ist_beleg = ab_pdf is not None and pdf_ziel.resolve() == Path(ab_pdf).resolve()
+    # Überschreiben nur derselben Rechnung und nur mit Zustimmung (gilt für App und Kommandozeile)
+    if ausgabe.exists():
+        ident = rechnungs_identitaet(ausgabe)
+        if ident and ident != (rechnungsnr, a.kunde):
+            raise DateiExistiert(f"{ausgabe.name} gehört zu Rechnung {ident[0]} für {ident[1]} – "
+                                 "bitte Rechnungsnummer ändern.", fremd=True)
+        if not ueberschreiben:
+            raise DateiExistiert(f"{ausgabe.name} existiert bereits.", fremd=False)
+    elif pdf_ziel.exists() and not ist_beleg and not ueberschreiben:
+        raise DateiExistiert(f"{pdf_ziel.name} existiert bereits.", fremd=False)
+    vorfassung = ausgabe.exists() or (pdf_ziel.exists() and not ist_beleg)
     fuelle_vorlage(vorlage, ausgabe, r)
     pdf_pfad = None
-    if pdf:
+    if pdf and ist_beleg:
+        hinweise.append(Hinweis(f"PDF nicht erzeugt: {pdf_ziel.name} ist der Beleg selbst – anderen Ausgabenamen wählen"))
+    elif pdf:
         try:
             pdf_pfad = nach_pdf(ausgabe)
         except RuntimeError as e:
             hinweise.append(Hinweis(f"PDF-Export fehlgeschlagen: {e}. Das DOCX ist fertig."))
-    elif altes_pdf.exists():
-        altes_pdf.unlink()  # gehörte zur vorherigen Fassung dieser Rechnung
-        hinweise.append(Hinweis(f"Veraltetes {altes_pdf.name} der vorherigen Fassung entfernt"))
+    elif vorfassung and pdf_ziel.exists() and not ist_beleg:
+        pdf_ziel.unlink()  # gehörte zur vorherigen Fassung dieser Rechnung
+        hinweise.append(Hinweis(f"Veraltetes {pdf_ziel.name} der vorherigen Fassung entfernt"))
     return Ergebnis(ausgabe, pdf_pfad, r, hinweise)
 
 
@@ -828,14 +916,18 @@ def main(argv=None) -> int:
     ap.add_argument("--vorlage", type=Path, default=VORLAGE)
     ap.add_argument("-o", "--ausgabe", type=Path, help="Ziel-DOCX")
     ap.add_argument("--pdf", action="store_true", help="zusätzlich PDF via LibreOffice")
+    ap.add_argument("--ueberschreiben", action="store_true", help="vorhandene Fassung derselben Rechnung ersetzen")
     args = ap.parse_args(argv)
     try:
         erg = erstelle_rechnung(
             args.ab_pdf, args.rechnungsnr, args.datum, args.von, args.bis, args.uebergabe,
             args.ust_id, args.angebot, args.ausgabe, args.vorlage, args.pdf,
             bestell_nr=args.bestellnr, bestell_datum=args.bestelldatum,
-            mit_uebergabe=False if args.ohne_uebergabe else None)
+            mit_uebergabe=False if args.ohne_uebergabe else None, ueberschreiben=args.ueberschreiben)
         ziel, r, hinweise = erg.docx, erg.rechnung, erg.hinweise
+    except DateiExistiert as e:
+        print(f"FEHLER: {e}" + ("" if e.fremd else " Ersetzen mit --ueberschreiben."), file=sys.stderr)
+        return 3
     except AbFehler as e:
         print(f"FEHLER (Beleg): {e}", file=sys.stderr)
         return 2

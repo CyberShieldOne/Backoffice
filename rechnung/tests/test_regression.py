@@ -94,10 +94,12 @@ class Pdf(unittest.TestCase):  # Funde 4 und 8
             t = Path(t)
             pfad, _ = ab_pdf(t)
             ziel = t / "r.docx"
+            ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=ziel)  # eigene Vorfassung
             altes = ziel.with_suffix(".pdf")
             altes.write_bytes(b"%PDF alt")
             with mock.patch.object(ra, "finde_soffice", return_value="/bin/false"):
-                erg = ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=ziel, pdf=True)
+                erg = ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=ziel, pdf=True,
+                                           ueberschreiben=True)
             self.assertTrue(erg.docx.exists())
             self.assertIsNone(erg.pdf)
             self.assertFalse(altes.exists(), "altes PDF darf nicht als Ergebnis stehen bleiben")
@@ -108,8 +110,9 @@ class Pdf(unittest.TestCase):  # Funde 4 und 8
             t = Path(t)
             pfad, _ = ab_pdf(t)
             ziel = t / "r.docx"
+            ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=ziel)  # eigene Vorfassung
             ziel.with_suffix(".pdf").write_bytes(b"%PDF alt")
-            erg = ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=ziel, pdf=False)
+            erg = ra.erstelle_rechnung(pfad, "2026-0001", datum=HEUTE, ausgabe=ziel, pdf=False, ueberschreiben=True)
             self.assertFalse(ziel.with_suffix(".pdf").exists())
             self.assertIsNone(erg.pdf)
 
@@ -326,16 +329,16 @@ class Server(unittest.TestCase):
 
     def test_hochgeladene_pdfs_werden_geloescht(self):  # Fund 11
         tmp = self.zustand.tmp
-        a_pdf, _ = ab_pdf(self.t, "a.pdf", seed=1)
-        b_pdf, _ = ab_pdf(self.t, "b.pdf", seed=2)
-        self.lesen(a_pdf)
-        self.assertEqual(len(list(tmp.iterdir())), 1)
-        self.lesen(b_pdf)
-        self.assertEqual(len(list(tmp.iterdir())), 1, "vorherige AB muss gelöscht sein")
+        ids = []
+        for i in range(app.UPLOADS_MAX + 2):
+            p, _ = ab_pdf(self.t, f"a{i}.pdf", seed=i + 1)
+            ids.append(self.lesen(p)[1]["id"])
+        self.assertEqual(len(list(tmp.iterdir())), app.UPLOADS_MAX, "nur die letzten Belege vorhalten")
+        self.assertNotIn(ids[0], self.zustand.uploads, "ältester Beleg muss gelöscht sein")
         (self.t / "kaputt.pdf").write_bytes(b"%PDF-1.4 kaputt")
         st, _ = self.lesen(self.t / "kaputt.pdf")
         self.assertNotEqual(st, 200)
-        self.assertEqual(len(list(tmp.iterdir())), 1, "unlesbare AB muss gelöscht sein")
+        self.assertEqual(len(list(tmp.iterdir())), app.UPLOADS_MAX, "unlesbarer Beleg muss gelöscht sein")
         self.post("/api/beenden", {})
         self.faden.join(5)
         self.assertFalse(tmp.exists(), "Temp-Ordner muss beim Beenden weg sein")

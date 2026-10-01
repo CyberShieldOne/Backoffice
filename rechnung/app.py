@@ -77,12 +77,14 @@ def _praefix_schluessel(praefix: str) -> str:
 def vergebene_nummern(ordner: Path) -> list[str]:
     """Rechnungsnummern (in Dateinamen-Schreibweise) der Rechnungen im Ablageordner."""
     try:
-        return [f.name.split("_Rechnung_", 1)[0] for f in ordner.glob("*_Rechnung_*.docx")]
+        return sorted({f.name.split("_Rechnung_", 1)[0] for f in ordner.glob("*_Rechnung_*")
+                       if f.suffix.lower() in (".docx", ".pdf")})
     except OSError:
         return []
 
 
 HISTORIE_MAX = 200
+UPLOADS_MAX = 5   # gleichzeitig vorgehaltene Belege (mehrere Browser-Tabs)
 
 
 def merke_in_historie(st: dict, eintrag: dict) -> None:
@@ -138,13 +140,27 @@ def naechste_nummer(letzte: str | None, vergeben: list[str], heute: dt.date) -> 
     return f"{praefix}{hoechste + 1:0{len(ziffern)}d}"
 
 
+JAHR_RX = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+
+
+def _schema(praefix: str) -> tuple[str, int]:
+    """('RE-2026-' ) -> ('RE-{J}-', 2026): Schema ohne Jahr + Jahr (0, wenn keins)."""
+    m = JAHR_RX.search(praefix)
+    if not m:
+        return _praefix_schluessel(praefix), 0
+    return _praefix_schluessel(praefix[:m.start()] + "{J}" + praefix[m.end():]), int(m.group(1))
+
+
 def hoehere_nummer(gespeichert: str | None, neu: str) -> str:
-    """Gespeicherte 'letzte Nummer' nur vorwärts bewegen (Korrektur einer alten Rechnung
-    darf den Vorschlag nicht zurücksetzen). Neues Schema ersetzt das alte."""
+    """Gespeicherte 'letzte Nummer' nur vorwärts bewegen: Korrektur einer alten Rechnung – auch aus
+    einem Vorjahr – setzt den Vorschlag nicht zurück. Ein neues Schema ersetzt das alte."""
     a, b = zerlege_nummer(gespeichert or ""), zerlege_nummer(neu)
-    if not a or not b or _praefix_schluessel(a[0]) != _praefix_schluessel(b[0]):
+    if not a or not b:
         return neu
-    return neu if int(b[1]) >= int(a[1]) else gespeichert  # type: ignore[return-value]
+    (sa, ja), (sb, jb) = _schema(a[0]), _schema(b[0])
+    if sa != sb:
+        return neu
+    return neu if (jb, int(b[1])) >= (ja, int(a[1])) else gespeichert  # type: ignore[return-value]
 
 
 def iso(d: dt.date | None) -> str | None:
@@ -309,10 +325,11 @@ class Handler(BaseHTTPRequestHandler):
             pfad.unlink(missing_ok=True)
             raise
         with self.zustand.lock:
-            # nur die aktuelle AB vorhalten, frühere Kunden-PDFs sofort löschen
-            for alt, _ in self.zustand.uploads.values():
-                alt.unlink(missing_ok=True)
-            self.zustand.uploads = {uid: (pfad, a)}
+            # die letzten UPLOADS_MAX Belege vorhalten (mehrere Tabs), ältere Kunden-PDFs sofort löschen
+            self.zustand.uploads[uid] = (pfad, a)
+            while len(self.zustand.uploads) > UPLOADS_MAX:
+                alt = next(iter(self.zustand.uploads))
+                self.zustand.uploads.pop(alt)[0].unlink(missing_ok=True)
         von = a.leistung_von or a.bestell_datum or a.ab_datum
         bis = a.leistung_bis or a.liefertermin
         aus_ab = a.quelle == "Auftragsbestätigung"   # Bericht/Roadmap-Satz nur bei Projekten aus der AB
@@ -326,14 +343,12 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         eintrag = self.zustand.uploads.get(d.get("id", ""))
         if not eintrag:
-            return self._fehler(400, "Bitte zuerst eine Auftragsbestätigung laden.")
+            return self._fehler(400, "Beleg nicht mehr vorhanden – bitte erneut hineinziehen.")
         pfad, a = eintrag
         nr = (d.get("nummer") or "").strip()
         if not nr:
             return self._fehler(422, "Bitte eine Rechnungsnummer eingeben.")
-        if not re.fullmatch(r"[A-Za-z0-9ÄÖÜäöü][A-Za-z0-9ÄÖÜäöü ._/#+-]{0,39}", nr):
-            return self._fehler(422, f"Rechnungsnummer '{nr}' enthält Zeichen, die nicht erlaubt sind. "
-                                     "Erlaubt: Buchstaben, Ziffern, Leerzeichen und . _ / # + -")
+        nr = ra.pruefe_rechnungsnr(nr)  # gleiche Regel wie Kommandozeile (AbFehler → 422)
 
         def datum(k):
             v = d.get(k)
@@ -347,24 +362,21 @@ class Handler(BaseHTTPRequestHandler):
         ziel = ordner / ra.rechnungs_dateiname(nr, a.kunde)
         # gleiche Nummer schon für einen anderen Kunden vergeben? → nie überschreibbar
         praefix = ra._dateiname(nr) + "_Rechnung_"
-        fremd = [f.name for f in ordner.glob(praefix + "*.docx") if f.name != ziel.name] if ordner.is_dir() else []
+        # auch Rechnungen, von denen nur noch das PDF existiert (DOCX nach Versand gelöscht)
+        fremd = sorted(f.name for f in ordner.glob(praefix + "*")
+                       if f.suffix.lower() in (".docx", ".pdf") and f.stem != ziel.stem) if ordner.is_dir() else []
         if fremd:
             return self._fehler(409, f"Rechnungsnummer {nr} ist bereits vergeben ({fremd[0]}).")
-        if ziel.exists():
-            # Dateiname ist verlustbehaftet → Identität aus den Dokumenteigenschaften prüfen
-            ident = ra.rechnungs_identitaet(ziel)
-            if ident and ident != (nr, a.kunde):
-                return self._fehler(409, f"{ziel.name} gehört zu Rechnung {ident[0]} für {ident[1]} – "
-                                         "bitte Rechnungsnummer ändern.")
-        if ziel.exists() and not d.get("ueberschreiben"):
-            return self._antwort(409, {"fehler": f"{ziel.name} existiert bereits.", "existiert": True})
         try:
             erg = ra.erstelle_rechnung(
                 pfad, nr, datum=datum("datum"), von=datum("von"), bis=datum("bis"),
                 uebergabe=datum("uebergabe"), ust_id=(d.get("ust_id") or "").strip(),
                 angebot=(d.get("angebot") or "").strip(), ausgabe=ziel, pdf=bool(d.get("pdf")),
                 auftrag=a, bestell_nr=(d.get("bestell_nr") or "").strip(),
-                bestell_datum=datum("bestell_datum"), mit_uebergabe=bool(d.get("uebergabe")))
+                bestell_datum=datum("bestell_datum"), mit_uebergabe=bool(d.get("uebergabe")),
+                ueberschreiben=bool(d.get("ueberschreiben")))
+        except ra.DateiExistiert as e:  # Identität und Rückfrage prüft der Kern (gilt auch für die CLI)
+            return self._antwort(409, {"fehler": str(e), **({} if e.fremd else {"existiert": True})})
         except OSError as e:
             return self._fehler(422, f"Ablageordner nicht beschreibbar: {e.strerror or e} ({ordner})")
         r = erg.rechnung
