@@ -147,6 +147,13 @@ class Auftrag:
     rechnungs_mail: str = ""
     positionen: list[Position] = field(default_factory=list)
     hinweise: list[Hinweis] = field(default_factory=list)
+    # nur bei Belegen, die schon eine Rechnung sind (z. B. SAP Ariba):
+    quelle: str = "Auftragsbestätigung"
+    rechnungsnr: str = ""
+    rechnungsdatum: dt.date | None = None
+    leistung_von: dt.date | None = None
+    leistung_bis: dt.date | None = None
+    ust_id_kunde: str = ""
 
 
 KOPF_LABELS = ["Datum", "Kunde", "Anschrift", "Kunden-Nr.", "Kundenkontakt",
@@ -275,6 +282,21 @@ def lese_ab(pdf_pfad: Path) -> Auftrag:
         positionen=positionen,
         hinweise=lese_hinweise,
     )
+
+
+def lese_beleg(pdf_pfad: Path) -> Auftrag:
+    """Belegart erkennen: CS-Auftragsbestätigung oder SAP-Ariba-Rechnung."""
+    import pdfplumber
+    import quelle_ariba
+
+    with pdfplumber.open(str(pdf_pfad)) as pdf:
+        erste = (pdf.pages[0].extract_text() or "") if pdf.pages else ""
+    if quelle_ariba.ist_ariba(erste):
+        return quelle_ariba.lese_ariba(pdf_pfad)
+    if "Auftragsbest" not in erste:
+        raise AbFehler("Unbekannter Beleg – erwartet wird eine CS-Auftragsbestätigung "
+                       "oder eine SAP-Ariba-Rechnung (Standardrechnung)")
+    return lese_ab(pdf_pfad)
 
 
 def _lese_positionen(words, zeilen, zeilen_txt) -> list[Position]:
@@ -433,7 +455,7 @@ class Rechnung:
     faellig: dt.date
     von: dt.date
     bis: dt.date
-    uebergabe: dt.date
+    uebergabe: dt.date | None   # None: kein Satz zu Bericht/Roadmap
     ust_id: str
     angebot: str
     auftrag: Auftrag
@@ -523,10 +545,43 @@ def _zeile_wie_vorlage(p_xml: str, label: str, wert: str) -> str:
     return re.sub(r' w14:paraId="[0-9A-F]+"', "", "".join(teile))
 
 
+def _entferne_absatz(xml: str, text_rx: str) -> str:
+    """Ganzen Absatz entfernen, dessen Gesamttext auf text_rx passt (z. B. leere Infozeile)."""
+    rx = re.compile(text_rx)
+    return P_RX.sub(lambda m: "" if rx.fullmatch("".join(absatz_texte(m.group(0)))) else m.group(0), xml)
+
+
+def _entferne_lauf(xml: str, text: str) -> str:
+    """Einen Run (samt Zeilenumbruch davor) mit genau diesem Text entfernen."""
+    return re.sub(r"<w:r>(?:(?!</w:r>).)*?<w:t[^>]*>" + re.escape(html.escape(text, quote=False))
+                  + r"</w:t></w:r>", "", xml, flags=re.S)
+
+
+def _optionale_teile(r: "Rechnung") -> list:
+    """Regeln für Belege ohne AB, ohne Übergabe von Bericht/Roadmap usw. (vor den allgemeinen Regeln)."""
+    a = r.auftrag
+    grundlage = f"Ihrer Bestellung {r.bestellung}" if r.bestell_nr else "des Auftrags"
+    regeln = []
+    if r.uebergabe is None:
+        regeln += [(_r(r", Bericht und Roadmap übergeben"), ""),
+                   (_r(r" Bericht, priorisierte Findings und 30/60/90-Tage-Roadmap wurden am "
+                       r"\[TT\.MM\.JJJJ\] übergeben\."), "")]
+    if not a.ab_nr:
+        regeln += [(_r(r"Leistung erbracht gemäß Auftragsbestätigung"),
+                    f"Leistung erbracht gemäß {grundlage}" if r.bestell_nr else "Leistung erbracht"),
+                   (_r(r"Leistungen gemäß Auftragsbestätigung \[2026-014-AB\]"),
+                    f"Leistungen gemäß {grundlage}" if r.bestell_nr else "Leistungen"),
+                   (_r(r"auf Grundlage der Auftragsbestätigung \[2026-014-AB\]"), f"auf Grundlage {grundlage}")]
+    if a.quelle == "SAP Ariba":
+        regeln.append((_r(r"Es gelten unsere AGB"),
+                       "Die Rechnung wurde elektronisch über SAP Ariba übermittelt. Es gelten unsere AGB"))
+    return regeln
+
+
 def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
     a = r.auftrag
     angebot = (lambda m: f" und des Angebots {r.angebot}") if r.angebot else ""
-    regeln_global = [
+    regeln_global = _optionale_teile(r) + [
         # Bestellnummer des Kunden: Verwendungszweck, Anschreiben, Infoblock (vor den allgemeinen Regeln)
         (_r(r"Verwendungszweck: Rechnung (?P<ph>\[2026-0142\])"),
          f"{r.nr} / Bestell-Nr. {r.bestell_nr}" if r.bestell_nr else r.nr),
@@ -548,7 +603,7 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
         (_r(r"\[TT\.MM\.\] – \[TT\.MM\.JJJJ\]"), r.zeitraum),
         (_r(r"Rechnungsdatum:?\s+(?P<ph>\[TT\.MM\.JJJJ\])"), fmt_datum(r.datum)),
         (_r(r"Zahlbar bis:\s*(?P<ph>\[TT\.MM\.JJJJ\])"), fmt_datum(r.faellig)),
-        (_r(r"am (?P<ph>\[TT\.MM\.JJJJ\]) übergeben"), fmt_datum(r.uebergabe)),
+        (_r(r"am (?P<ph>\[TT\.MM\.JJJJ\]) übergeben"), fmt_datum(r.uebergabe) if r.uebergabe else ""),
         (_r(r"^\[TT\.MM\.JJJJ\]$"), fmt_datum(r.faellig)),
         (_r(r"^(?P<ph>\d+) Tage netto ab Rechnungsdatum"), str(a.zahlungsziel_tage)),
         (_r(r"Steuersatz (?P<ph>19) %"), str(UST_SATZ)),
@@ -562,6 +617,13 @@ def fuelle_vorlage(vorlage: Path, ziel: Path, r: Rechnung) -> None:
     doc = _positionszeilen(doc, r)
     if r.bestell_nr:
         doc = _infozeile_bestellung(doc)
+    # Leere Angaben: Zeile weglassen statt Platzhalter oder "—"
+    if not a.ab_nr:
+        doc = _entferne_absatz(doc, r"Auftragsbestätigung  \[2026-014-AB\]")
+    if not a.kunden_nr:
+        doc = _entferne_absatz(doc, r"Kundennummer  \[K-1042\]")
+    if not a.kontakt:
+        doc = _entferne_lauf(doc, "z. Hd. [Ansprechpartner]")
     doc = ersetze(doc, regeln_global)
     # Summenblock: verbleibende [0,00 €] in Reihenfolge netto, USt, brutto
     summen = iter([r.netto, r.ust, r.brutto])
@@ -643,17 +705,28 @@ class Ergebnis:
     hinweise: list[Hinweis]
 
 
-def erstelle_rechnung(ab_pdf: Path, rechnungsnr: str, datum: dt.date | None = None,
+def erstelle_rechnung(ab_pdf: Path, rechnungsnr: str | None = None, datum: dt.date | None = None,
                       von: dt.date | None = None, bis: dt.date | None = None,
-                      uebergabe: dt.date | None = None, ust_id: str = "", angebot: str = "",
+                      uebergabe: dt.date | None = None, ust_id: str | None = None, angebot: str = "",
                       ausgabe: Path | None = None, vorlage: Path = VORLAGE,
                       pdf: bool = False, auftrag: Auftrag | None = None,
-                      bestell_nr: str | None = None, bestell_datum: dt.date | None = None) -> Ergebnis:
+                      bestell_nr: str | None = None, bestell_datum: dt.date | None = None,
+                      mit_uebergabe: bool | None = None) -> Ergebnis:
     """Erzeugt die Rechnung. Ein bereits gelesener Auftrag kann übergeben werden.
-    Scheitert nur der PDF-Export, ist das DOCX trotzdem fertig (Hinweis statt Ausnahme)."""
-    a = auftrag or lese_ab(ab_pdf)
+    None bedeutet jeweils: Wert aus dem Beleg bzw. Standard. Scheitert nur der PDF-Export,
+    ist das DOCX trotzdem fertig (Hinweis statt Ausnahme)."""
+    a = auftrag or lese_beleg(ab_pdf)
     hinweise = list(a.hinweise)
-    datum = datum or dt.date.today()
+    rechnungsnr = (rechnungsnr or a.rechnungsnr or "").strip()
+    if not rechnungsnr:
+        raise AbFehler("Rechnungsnummer fehlt (--rechnungsnr)")
+    datum = datum or a.rechnungsdatum or dt.date.today()
+    bis = bis or a.leistung_bis
+    von = von or a.leistung_von
+    if ust_id is None:
+        ust_id = a.ust_id_kunde
+    if mit_uebergabe is None:
+        mit_uebergabe = a.quelle == "Auftragsbestätigung"  # Bericht/Roadmap gibt es nur bei Projekten aus der AB
     if bis is None:
         bis = a.liefertermin or datum
         hinweise.append(Hinweis(f"Leistungszeitraum-Ende = {'Liefertermin' if a.liefertermin else 'Rechnungsdatum'} "
@@ -662,7 +735,9 @@ def erstelle_rechnung(ab_pdf: Path, rechnungsnr: str, datum: dt.date | None = No
         von = a.bestell_datum or a.ab_datum
         hinweise.append(Hinweis(f"Leistungszeitraum-Beginn = {'Bestelldatum' if a.bestell_datum else 'AB-Datum'} "
                                 f"{fmt_datum(von)}", "--von", standard=True))
-    if uebergabe is None:
+    if not mit_uebergabe:
+        uebergabe = None
+    elif uebergabe is None:
         uebergabe = bis
         hinweise.append(Hinweis(f"Übergabe Bericht/Roadmap = {fmt_datum(bis)}", "--uebergabe", standard=True))
     if von > bis:
@@ -706,14 +781,15 @@ def _datum_arg(s: str) -> dt.date:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Rechnung (DOCX) aus Auftragsbestätigung (PDF) erzeugen")
-    ap.add_argument("ab_pdf", type=Path, help="Auftragsbestätigung als PDF")
-    ap.add_argument("--rechnungsnr", required=True, help="z. B. 2026-0142")
+    ap = argparse.ArgumentParser(description="Rechnung (DOCX) aus Auftragsbestätigung oder SAP-Ariba-Rechnung (PDF)")
+    ap.add_argument("ab_pdf", type=Path, help="Auftragsbestätigung oder SAP-Ariba-Rechnung als PDF")
+    ap.add_argument("--rechnungsnr", help="z. B. 2026-0142 (bei SAP-Rechnungen Standard: deren Nummer)")
     ap.add_argument("--datum", type=_datum_arg, help="Rechnungsdatum TT.MM.JJJJ (Standard: heute)")
     ap.add_argument("--von", type=_datum_arg, help="Leistungsbeginn (Standard: Bestelldatum)")
     ap.add_argument("--bis", type=_datum_arg, help="Leistungsende (Standard: Liefertermin)")
     ap.add_argument("--uebergabe", type=_datum_arg, help="Übergabe Bericht/Roadmap (Standard: --bis)")
-    ap.add_argument("--ust-id", default="", help="USt-IdNr. des Empfängers")
+    ap.add_argument("--ohne-uebergabe", action="store_true", help="Satz zu Bericht/Roadmap weglassen")
+    ap.add_argument("--ust-id", help="USt-IdNr. des Empfängers (Standard: aus dem Beleg)")
     ap.add_argument("--angebot", default="", help="Angebotsnummer")
     ap.add_argument("--bestellnr", help="Bestellnummer des Kunden (Standard: aus der AB)")
     ap.add_argument("--bestelldatum", type=_datum_arg, help="Datum der Bestellung (Standard: aus der AB)")
@@ -725,15 +801,17 @@ def main(argv=None) -> int:
         erg = erstelle_rechnung(
             args.ab_pdf, args.rechnungsnr, args.datum, args.von, args.bis, args.uebergabe,
             args.ust_id, args.angebot, args.ausgabe, args.vorlage, args.pdf,
-            bestell_nr=args.bestellnr, bestell_datum=args.bestelldatum)
+            bestell_nr=args.bestellnr, bestell_datum=args.bestelldatum,
+            mit_uebergabe=False if args.ohne_uebergabe else None)
         ziel, r, hinweise = erg.docx, erg.rechnung, erg.hinweise
     except AbFehler as e:
-        print(f"FEHLER (Auftragsbestätigung): {e}", file=sys.stderr)
+        print(f"FEHLER (Beleg): {e}", file=sys.stderr)
         return 2
     a = r.auftrag
     print(f"Rechnung {r.nr} → {ziel}" + (f" (+ {erg.pdf.name})" if erg.pdf else ""))
-    print(f"  Kunde:      {a.kunde}, {a.strasse}, {a.plz_ort} (z. Hd. {a.kontakt})")
-    print(f"  AB:         {a.ab_nr} vom {fmt_datum(a.ab_datum)}, Kunden-Nr. {a.kunden_nr}, "
+    print(f"  Quelle:     {a.quelle}")
+    print(f"  Kunde:      {a.kunde}, {a.strasse}, {a.plz_ort}" + (f" (z. Hd. {a.kontakt})" if a.kontakt else ""))
+    print(f"  Beleg:      {a.ab_nr or a.rechnungsnr} vom {fmt_datum(a.ab_datum)}, Kunden-Nr. {a.kunden_nr or '—'}, "
           f"Bestellung {r.bestellung or '—'}")
     print(f"  Leistung:   {a.projekt}, Zeitraum {r.zeitraum}")
     print(f"  Beträge:    netto {fmt_betrag(r.netto)} + USt {fmt_betrag(r.ust)} = {fmt_betrag(r.brutto)}")

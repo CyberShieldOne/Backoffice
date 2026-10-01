@@ -1,12 +1,12 @@
 // Browser-Test der Oberfläche (Funde 2, 6, 7 + Grundablauf).
-// Aufruf: node tests/ui_test.js <URL der laufenden App> <AB-A.pdf> <AB-B.pdf> <Arbeitsordner>
+// Aufruf: node tests/ui_test.js <URL der laufenden App> <AB-A.pdf> <AB-B.pdf> <Arbeitsordner> [SAP-Ariba.pdf]
 // Voraussetzung: npm-Paket playwright.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
 (async () => {
-  const [url, abA, abB, arbeit] = process.argv.slice(2);
+  const [url, abA, abB, arbeit, sap] = process.argv.slice(2);
   const fehler = [];
   const pruefe = (bed, text) => { console.log((bed ? 'OK   ' : 'FEHL ') + text); if (!bed) fehler.push(text); };
   const b = await chromium.launch();
@@ -63,6 +63,26 @@ const path = require('path');
          'USt-IdNr./Angebot nach AB-Wechsel geleert');
   pruefe(await p.isHidden('#ergebnis'), 'altes Ergebnis ausgeblendet');
   pruefe(await p.inputValue('#f-bestellnr') !== '', 'Bestellnummer aus der AB vorbelegt');
+
+  // SAP-Ariba-Rechnung: Nummer, Datum, USt-IdNr. aus dem Beleg; Übergabe leer; danach AB → zurück auf eigenes Schema
+  if (sap) {
+    const vorher = await p.inputValue('#f-nummer');
+    await p.setInputFiles('#datei', sap);
+    await p.waitForFunction(() => document.getElementById('ablage').textContent.includes('SAP Ariba'));
+    const nr = await p.inputValue('#f-nummer');
+    pruefe(nr.startsWith('RE-'), 'SAP: Rechnungsnummer aus dem Beleg (' + nr + ')');
+    pruefe(await p.inputValue('#f-ustid') !== '', 'SAP: USt-IdNr. des Kunden vorbelegt');
+    pruefe(await p.inputValue('#f-uebergabe') === '', 'SAP: kein Übergabedatum (Satz entfällt)');
+    pruefe((await p.textContent('#a-ab-label')) === 'SAP-Rechnung', 'SAP: Beleg als SAP-Rechnung angezeigt');
+    await p.click('#erstellen');
+    await p.waitForFunction((n) => document.getElementById('ergebnis').textContent.includes(n), nr);
+    pruefe((await p.textContent('#ergebnis')).includes('Rechnung erstellt'), 'SAP: Rechnung erstellt');
+    pruefe(await p.inputValue('#f-nummer') === vorher, 'SAP-Nummer verändert das eigene Nummernschema nicht');
+    await p.setInputFiles('#datei', abB);
+    await p.waitForFunction(() => document.getElementById('ablage').textContent.includes('Auftragsbestätigung'));
+    pruefe(await p.inputValue('#f-nummer') === vorher, 'nach SAP-Beleg: AB bekommt wieder eigene Nummer');
+    pruefe(await p.inputValue('#f-uebergabe') !== '', 'AB: Übergabedatum wieder vorbelegt');
+  }
 
   // Fund 6: Server weg → Meldung, Knopf wieder bedienbar
   await p.evaluate(() => fetch('/api/beenden', { method: 'POST', headers: { 'X-Token': TOKEN } }));

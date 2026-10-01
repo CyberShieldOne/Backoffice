@@ -91,16 +91,16 @@
 </head>
 <body>
 <header>
-  <span class="marke">CYBER SHIELD</span><span class="titel">Rechnung aus Auftragsbestätigung</span>
+  <span class="marke">CYBER SHIELD</span><span class="titel">Rechnung aus Auftragsbestätigung oder SAP-Rechnung</span>
   <button class="klein" id="beenden" title="Programm beenden">Beenden</button>
 </header>
 <main>
   <div id="getrennt" class="meldung fehler versteckt">Keine Verbindung zu CS Rechnung – das Programm wurde beendet.
     Bitte CS Rechnung neu starten; dieses Fenster kann geschlossen werden.</div>
   <section class="karte">
-    <h2><span class="nr">1</span>Auftragsbestätigung</h2>
+    <h2><span class="nr">1</span>Beleg: Auftragsbestätigung oder SAP-Ariba-Rechnung</h2>
     <div class="ablage" id="ablage" tabindex="0">
-      <strong>AB-PDF hierher ziehen</strong><span>oder klicken zum Auswählen</span>
+      <strong>PDF hierher ziehen</strong><span>Auftragsbestätigung oder SAP-Ariba-Rechnung – oder klicken zum Auswählen</span>
     </div>
     <input type="file" id="datei" accept="application/pdf,.pdf" class="versteckt">
     <div id="lesefehler" class="meldung fehler versteckt" style="margin-top:12px"></div>
@@ -108,7 +108,7 @@
   </section>
 
   <section class="karte versteckt" id="auftrag">
-    <h2><span class="nr">2</span>Aus der AB gelesen</h2>
+    <h2><span class="nr">2</span>Aus dem Beleg gelesen</h2>
     <div class="raster">
       <dl>
         <div class="wert"><dt>Kunde</dt><dd id="a-kunde"></dd></div>
@@ -117,7 +117,7 @@
         <div class="wert"><dt>Rechnung an</dt><dd id="a-mail"></dd></div>
       </dl>
       <dl>
-        <div class="wert"><dt>Auftragsbest.</dt><dd id="a-ab"></dd></div>
+        <div class="wert"><dt id="a-ab-label">Auftragsbest.</dt><dd id="a-ab"></dd></div>
         <div class="wert"><dt>Kundennummer</dt><dd id="a-kdnr"></dd></div>
         <div class="wert"><dt>Bestellung</dt><dd id="a-bestellung"></dd></div>
         <div class="wert"><dt>Projekt</dt><dd id="a-projekt"></dd></div>
@@ -147,7 +147,7 @@
       <span></span>
       <label>Leistung von<input type="date" id="f-von" required></label>
       <label>Leistung bis<input type="date" id="f-bis" required></label>
-      <label>Bericht übergeben am<input type="date" id="f-uebergabe" required></label>
+      <label><span>Bericht übergeben am <span class="info">(leer: Satz entfällt)</span></span><input type="date" id="f-uebergabe"></label>
       <label><span>USt-IdNr. Empfänger <span class="info">(optional)</span></span><input type="text" id="f-ustid" placeholder="—"></label>
       <label><span>Angebotsnummer <span class="info">(optional)</span></span><input type="text" id="f-angebot" placeholder="wird weggelassen"></label>
       <label>&nbsp;<span class="check"><input type="checkbox" id="f-pdf"> zusätzlich PDF</span></label>
@@ -222,7 +222,7 @@ function faelligAktualisieren() {
   $("f-faellig").value = d ? `${deDatum(plusTage(d, zahlungsziel))} (${zahlungsziel} Tage)` : "";
 }
 
-let vorschlag = "";
+let vorschlag = "", heute = "", belegVorgabe = {nummer: "", datum: ""};
 function zeigeVorschlag(nr) {
   vorschlag = nr;
   const el = $("f-nummer-vorschlag");
@@ -237,6 +237,7 @@ function zeigeVorschlag(nr) {
 
 async function start() {
   const {daten} = await api("/api/start");
+  heute = daten.heute;
   if (!$("f-nummer").value) $("f-nummer").value = daten.nummer;  // eigene Eingabe nie überschreiben
   zeigeVorschlag(daten.nummer);
   $("f-datum").value = daten.heute;
@@ -255,8 +256,8 @@ async function ladeAb(datei) {
   ablageText(`Lese ${datei.name} …`);
   const {status, daten} = await api("/api/lesen", datei, {"X-Dateiname": encodeURIComponent(datei.name)});
   if (status !== 200) {
-    ablageText("AB-PDF hierher ziehen", "oder klicken zum Auswählen");
-    $("lesefehler").textContent = "Konnte die Auftragsbestätigung nicht lesen: " + (daten.fehler || status);
+    ablageText("PDF hierher ziehen", "Auftragsbestätigung oder SAP-Ariba-Rechnung – oder klicken zum Auswählen");
+    $("lesefehler").textContent = "Konnte den Beleg nicht lesen: " + (daten.fehler || status);
     $("lesefehler").classList.remove("versteckt");
     $("auftrag").classList.add("versteckt");
     $("rechnung").classList.add("versteckt");
@@ -266,18 +267,26 @@ async function ladeAb(datei) {
   const a = daten.auftrag;
   zahlungsziel = a.zahlungsziel_tage;
   ablage.classList.add("geladen");
-  ablageText(`✓ ${datei.name}`, "andere AB wählen");
+  ablageText(`✓ ${datei.name} (${a.quelle})`, "anderen Beleg wählen");
   hinweisListe($("lesehinweise"), daten.hinweise);
-  // kundenbezogene Eingaben der vorherigen AB nie übernehmen
-  $("f-ustid").value = "";
+  // kundenbezogene Eingaben des vorherigen Belegs nie übernehmen
+  $("f-ustid").value = a.ust_id_kunde || "";
   $("f-angebot").value = "";
+  // Werte, die ein Beleg vorgibt (SAP-Rechnung: Nummer, Datum), beim nächsten Beleg zurücksetzen
+  if (belegVorgabe.nummer && $("f-nummer").value === belegVorgabe.nummer) $("f-nummer").value = vorschlag;
+  if (belegVorgabe.datum && $("f-datum").value === belegVorgabe.datum) $("f-datum").value = heute;
+  belegVorgabe = {nummer: a.rechnungsnr || "", datum: a.rechnungsdatum || ""};
+  if (a.rechnungsnr) $("f-nummer").value = a.rechnungsnr;
+  if (a.rechnungsdatum) $("f-datum").value = a.rechnungsdatum;
+  zeigeVorschlag(vorschlag);
   $("f-bestellnr").value = a.bestell_nr || "";
   $("f-bestelldatum").value = a.bestell_datum || "";
   setzeText("a-kunde", a.kunde);
   setzeText("a-anschrift", `${a.strasse}, ${a.plz_ort}`);
   setzeText("a-kontakt", a.kontakt);
   setzeText("a-mail", a.rechnungs_mail);
-  setzeText("a-ab", `${a.ab_nr} vom ${deDatum(a.ab_datum)}`);
+  $("a-ab-label").textContent = a.ab_nr ? "Auftragsbest." : "SAP-Rechnung";
+  setzeText("a-ab", `${a.ab_nr || a.rechnungsnr} vom ${deDatum(a.ab_datum)}`);
   setzeText("a-kdnr", a.kunden_nr);
   setzeText("a-bestellung", a.bestell_nr ? `${a.bestell_nr} vom ${deDatum(a.bestell_datum)}` : "");
   setzeText("a-projekt", a.projekt);
@@ -290,7 +299,7 @@ async function ladeAb(datei) {
       const td = document.createElement("td");
       if (k === 1) {
         td.textContent = p.titel;
-        const s = document.createElement("small"); s.textContent = p.produkt; td.appendChild(s);
+        const s = document.createElement("small"); s.textContent = p.produkt || p.beschreibung || ""; td.appendChild(s);
       } else td.textContent = z;
       if (k >= 2) td.className = "zahl";
       tr.appendChild(td);
@@ -304,7 +313,7 @@ async function ladeAb(datei) {
   const v = daten.vorschlag;
   $("f-von").value = v.von || "";
   $("f-bis").value = v.bis || $("f-datum").value;
-  $("f-uebergabe").value = v.uebergabe || $("f-bis").value;
+  $("f-uebergabe").value = v.uebergabe || "";
   faelligAktualisieren();
   $("auftrag").classList.remove("versteckt");
   $("rechnung").classList.remove("versteckt");

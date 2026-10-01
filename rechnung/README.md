@@ -1,6 +1,13 @@
-# Rechnung aus Auftragsbestätigung
+# Rechnung aus Auftragsbestätigung oder SAP-Ariba-Rechnung
 
-Füllt `vorlagen/2026-OKT_CS-Rechnung_Vorlage.dotx` mit den Daten einer CS-Auftragsbestätigung (PDF).
+Füllt `vorlagen/2026-OKT_CS-Rechnung_Vorlage.dotx` mit den Daten einer CS-Auftragsbestätigung (PDF)
+oder einer SAP-Ariba-„Standardrechnung“ (z. B. Infineon Supplier Portal, `quelle_ariba.py`).
+Die Belegart wird automatisch erkannt.
+
+Bei SAP-Rechnungen kommen Rechnungsnummer, Rechnungsdatum, Leistungszeitraum, Bestellnummer, Zahlungsziel
+und USt-IdNr. des Kunden aus dem Beleg. Die Nummer bleibt die der eingereichten SAP-Rechnung (sonst Doppelzahlungsrisiko),
+auf der Rechnung steht der Hinweis auf die Übermittlung über SAP Ariba. Zeilen ohne Wert (Auftragsbestätigung,
+Kundennummer, z. Hd., Bericht/Roadmap-Satz) entfallen.
 
 ```
 pip install -r requirements.txt
@@ -27,7 +34,8 @@ oder nach dem Füllen noch ein `[…]`-Platzhalter im Dokument steht.
 Tests:
 - `python tests/test_rechnung.py --iterationen 10 --je 6 --echt AB.pdf --pdf` – synthetische ABs (Zufallsvarianten)
 - `python -m unittest tests/test_regression.py` – Regressionstests zu den Review-Funden und zur Bestellnummer
-- `node tests/ui_test.js <URL> <AB-A.pdf> <AB-B.pdf> <Ordner>` – Oberfläche (Playwright), App vorher mit `python app.py --kein-browser` starten
+- `python -m unittest tests/test_ariba.py` – synthetische SAP-Ariba-Rechnungen (10 Iterationen × 5)
+- `node tests/ui_test.js <URL> <AB-A.pdf> <AB-B.pdf> <Ordner> [SAP.pdf]` – Oberfläche (Playwright), App vorher mit `python app.py --kein-browser` starten
 
 ## macOS-App „CS Rechnung“
 

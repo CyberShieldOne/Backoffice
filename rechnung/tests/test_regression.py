@@ -244,8 +244,8 @@ class Server(unittest.TestCase):
     def test_ablauf_doppelte_nummer_relativer_ordner_oeffnen(self):  # Funde 3, 12, 13, 15
         a_pdf, _ = ab_pdf(self.t, "a.pdf", seed=1)
         b_pdf, _ = ab_pdf(self.t, "b.pdf", seed=2)
-        zaehler = mock.Mock(wraps=ra.lese_ab)
-        with mock.patch.object(ra, "lese_ab", zaehler):
+        zaehler = mock.Mock(wraps=ra.lese_beleg)
+        with mock.patch.object(ra, "lese_beleg", zaehler):
             st, d = self.lesen(a_pdf)
             self.assertEqual(st, 200, d)
             # Fund 15: Beträge kommen vom Server

@@ -151,8 +151,10 @@ def auftrag_json(a: ra.Auftrag) -> dict:
         "summe_netto": str(a.summe_netto), "zahlungsziel_tage": a.zahlungsziel_tage,
         "bestell_nr": a.bestell_nr, "bestell_datum": iso(a.bestell_datum),
         "liefertermin": iso(a.liefertermin), "rechnungs_mail": a.rechnungs_mail,
+        "quelle": a.quelle, "rechnungsnr": a.rechnungsnr, "rechnungsdatum": iso(a.rechnungsdatum),
+        "ust_id_kunde": a.ust_id_kunde,
         "positionen": [{"titel": p.titel, "produkt": p.produkt, "einheit": p.einheit,
-                        "menge": p.menge, "betrag": str(p.betrag),
+                        "beschreibung": p.beschreibung, "menge": p.menge, "betrag": str(p.betrag),
                         "betrag_fmt": ra.fmt_betrag(p.betrag)} for p in a.positionen],
         # Beträge rechnet nur der Server (gleiche Rundung wie auf der Rechnung)
         "ust_satz": str(ra.UST_SATZ),
@@ -294,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
         pfad = self.zustand.tmp / f"{uid}_{name}"
         pfad.write_bytes(daten)
         try:
-            a = ra.lese_ab(pfad)
+            a = ra.lese_beleg(pfad)
         except Exception:
             pfad.unlink(missing_ok=True)
             raise
@@ -303,11 +305,12 @@ class Handler(BaseHTTPRequestHandler):
             for alt, _ in self.zustand.uploads.values():
                 alt.unlink(missing_ok=True)
             self.zustand.uploads = {uid: (pfad, a)}
-        von = a.bestell_datum or a.ab_datum
-        bis = a.liefertermin
+        von = a.leistung_von or a.bestell_datum or a.ab_datum
+        bis = a.leistung_bis or a.liefertermin
+        aus_ab = a.quelle == "Auftragsbestätigung"   # Bericht/Roadmap-Satz nur bei Projekten aus der AB
         return self._antwort(200, {
             "id": uid, "auftrag": auftrag_json(a),
-            "vorschlag": {"von": iso(von), "bis": iso(bis), "uebergabe": iso(bis)},
+            "vorschlag": {"von": iso(von), "bis": iso(bis), "uebergabe": iso(bis) if aus_ab else None},
             "hinweise": hinweise_fuer_ui(a.hinweise),
         })
 
@@ -347,17 +350,18 @@ class Handler(BaseHTTPRequestHandler):
                 uebergabe=datum("uebergabe"), ust_id=(d.get("ust_id") or "").strip(),
                 angebot=(d.get("angebot") or "").strip(), ausgabe=ziel, pdf=bool(d.get("pdf")),
                 auftrag=a, bestell_nr=(d.get("bestell_nr") or "").strip(),
-                bestell_datum=datum("bestell_datum"))
+                bestell_datum=datum("bestell_datum"), mit_uebergabe=bool(d.get("uebergabe")))
         except OSError as e:
             return self._fehler(422, f"Ablageordner nicht beschreibbar: {e.strerror or e} ({ordner})")
         r = erg.rechnung
         self.zustand.erstellt.update(str(x) for x in (erg.docx, erg.pdf) if x)
         st = lade_status()
-        st.update({"ordner": str(ordner), "letzte_nummer": hoehere_nummer(st.get("letzte_nummer"), nr),
-                   "pdf": bool(d.get("pdf"))})
+        st.update({"ordner": str(ordner), "pdf": bool(d.get("pdf"))})
+        if nr != a.rechnungsnr:  # fremd vergebene Nummern (SAP) bestimmen nicht das eigene Nummernschema
+            st["letzte_nummer"] = hoehere_nummer(st.get("letzte_nummer"), nr)
         merke_in_historie(st, {
             "nummer": nr, "kunde": a.kunde, "brutto": ra.fmt_betrag(r.brutto),
-            "rechnungsdatum": r.datum.isoformat(), "ab_nr": a.ab_nr, "projekt": a.projekt,
+            "rechnungsdatum": r.datum.isoformat(), "ab_nr": a.ab_nr or a.quelle, "projekt": a.projekt,
             "erstellt": dt.datetime.now().isoformat(timespec="seconds"), "docx": str(erg.docx),
         })
         speichere_status(st)
@@ -368,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
             "brutto": ra.fmt_betrag(r.brutto), "faellig": ra.fmt_datum(r.faellig),
             "zeitraum": r.zeitraum,
             "hinweise": hinweise_fuer_ui(erg.hinweise),
-            "naechste_nummer": naechste_nummer(st["letzte_nummer"], vergebene_nummern(ordner),
+            "naechste_nummer": naechste_nummer(st.get("letzte_nummer"), vergebene_nummern(ordner),
                                                dt.date.today()),
         })
 
